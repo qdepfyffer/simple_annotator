@@ -1,0 +1,14 @@
+# Folders
+ignored/
+images/
+__pycache__/
+
+# Virtual Environment
+.venv/
+
+# JetBrains IDEs
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
