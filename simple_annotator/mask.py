@@ -1,0 +1,34 @@
+"""Mask file locations and handling"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import numpy as np
+from PIL import Image
+
+MASK_SUFFIX = "_L"
+
+
+def labels_dir(image_path: Path) -> Path:
+    """Sibling folder for image masks: <parent>_labels"""
+    parent = image_path.parent
+    return parent.parent / (parent.name + "_labels")
+
+
+def mask_path(image_path: Path) -> Path:
+    """Full path to mask image for a given source image"""
+    image_path = Path(image_path)
+    return labels_dir(image_path) / (image_path.stem + MASK_SUFFIX + ".png")
+
+
+def save_mask(mask: np.ndarray, path: Path) -> None:
+    """Write RGB mask array to disk and create labels folder if necessary"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(mask).save(path)
+
+
+def load_mask(path: Path) -> np.ndarray | None:
+    """Load RGB mask if it exists"""
+    if not path.exists():
+        return None
+    return np.asarray(Image.open(path).convert("RGB"))

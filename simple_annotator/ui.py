@@ -1,0 +1,322 @@
+"""
+Qt user interface for the annotator
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import numpy as np
+from matplotlib.backend_bases import MouseButton, MouseEvent
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+from PIL import Image
+from PySide6.QtCore import (
+    QDir, QModelIndex, QObject,
+    QRunnable, QThreadPool, Signal,
+    Slot,
+)
+from PySide6.QtGui import (
+    QAction, QActionGroup, QKeySequence,
+    QPalette, QCloseEvent,
+)
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDialogButtonBox,
+    QDoubleSpinBox, QFormLayout, QFileSystemModel,
+    QMainWindow, QMessageBox, QSpinBox,
+    QSplitter, QTreeView, QVBoxLayout,
+    QWidget,
+)
+
+from . import config, segmentation
+from .annotation import DEFAULT_CLASSES, AnnotationSession
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+
+class SegmentWorker(QRunnable):
+    """Runs a segmenter on a background thread and signals resulting labels"""
+
+    class Signals(QObject):
+        finished = Signal(Path, np.ndarray, np.ndarray)  # path, img, lbl
+        failed = Signal(Path, str)
+
+    def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: dict) -> None:
+        super().__init__()
+        self.path = path
+        self.image = image
+        self.segmenter = segmenter
+        self.params = params
+        self.signals = self.Signals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            labels = segmentation.run_segmenter(self.segmenter, self.image, self.params)
+        except Exception as e:
+            self.signals.failed.emit(self.path, str(e))
+            return
+        self.signals.finished.emit(self.path, self.image, labels)
+
+
+class SettingsDialog(QDialog):
+    """Edit segmenter choice and its parameters (determined by segmenter parameter metadata)"""
+
+    def __init__(self, settings: config.Settings, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Segmentation Settings")
+        self.settings = settings
+        self._values = {key: dict(params) for key, params in settings.params.items()}
+        self._editors: dict[str, QSpinBox | QDoubleSpinBox] = {}
+        self._form_key = settings.segmenter
+
+        self.combo = QComboBox()
+        for key, seg in segmentation.REGISTRY.items():
+            self.combo.addItem(seg.label, key)
+        self.combo.setCurrentIndex(self.combo.findData(settings.segmenter))
+
+        self.form = QFormLayout()
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.combo)
+        layout.addLayout(self.form)
+        layout.addWidget(buttons)
+
+        self._build_form()
+        self.combo.currentIndexChanged.connect(self._on_segmenter_changed)
+
+
+    def _stash(self) -> None:
+        """Copy current editor values into the working copy"""
+        for param_key, editor in self._editors.items():
+            self._values[self._form_key][param_key] = editor.value()
+
+
+    def _on_segmenter_changed(self) -> None:
+        self._stash()
+        self._form_key = self.combo.currentData()
+        self._build_form()
+
+
+    def _build_form(self) -> None:
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self._editors.clear()
+        seg = segmentation.REGISTRY[self._form_key]
+        values = self._values[seg.key]
+        for param in seg.params:
+            low = param.minimum if param.minimum is not None else 0
+            high = param.maximum if param.maximum is not None else 1e9
+            editor: QSpinBox | QDoubleSpinBox
+            if param.type is int:
+                editor = QSpinBox()
+                editor.setRange(int(low), int(high))
+                editor.setValue(int(values[param.key]))
+            else:
+                editor = QDoubleSpinBox()
+                editor.setRange(float(low), float(high))
+                editor.setValue(float(values[param.key]))
+            self._editors[param.key] = editor
+            self.form.addRow(param.label, editor)
+
+
+    def apply(self) -> None:
+        """Write edited values back to settings"""
+        self._stash()
+        self.settings.segmenter = self._form_key
+        self.settings.params = self._values
+
+
+class MainWindow(QMainWindow):
+    """Main window for the annotator"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Simple Annotator")
+        self.resize(800, 600)
+
+        self.settings = config.load()
+        self.pool = QThreadPool().globalInstance()
+        self.session: AnnotationSession | None = None
+        self._pending_path: Path | None = None
+        
+        # === FILE BROWSER =============================================================================================
+        self.fs_model = QFileSystemModel()
+        self.fs_model.setRootPath(QDir.homePath())
+        self.tree = QTreeView()
+        self.tree.setModel(self.fs_model)
+        self.tree.setRootIndex(self.fs_model.index(QDir.homePath()))
+        for column in range(1, self.fs_model.columnCount()):
+            self.tree.hideColumn(column)
+        self.tree.activated.connect(self._on_file_activated)
+
+        # === IMAGE CANVAS =============================================================================================
+        background = self.palette().color(QPalette.ColorRole.Window).name()
+        self.figure = Figure(facecolor=background)
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
+        self.axes = self.figure.add_subplot()
+        self.axes.set_axis_off()
+        
+        splitter = QSplitter()
+        splitter.addWidget(self.tree)
+        splitter.addWidget(self.canvas)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([300, 900])
+        self.setCentralWidget(splitter)
+        self.statusBar().showMessage("Open an image to begin")
+
+        # === TOOLBAR ==================================================================================================
+        toolbar = self.addToolBar("Annotate")
+        toolbar.setMovable(False)
+
+        self.class_group = QActionGroup(self)
+        for index, cls in enumerate(DEFAULT_CLASSES):
+            action = QAction(cls.name, self)
+            action.setCheckable(True)
+            action.setShortcut(str(index + 1))
+            action.setData(index)
+            self.class_group.addAction(action)
+            toolbar.addAction(action)
+        self.class_group.actions()[1].setChecked(True)  # Sets the first non-default class as the class to paint
+
+        toolbar.addSeparator()
+        undo_action = QAction("Undo", self)
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_action.triggered.connect(self._undo)
+        toolbar.addAction(undo_action)
+
+        redo_action = QAction("Redo", self)
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_action.triggered.connect(self._redo)
+        toolbar.addAction(redo_action)
+
+        toolbar.addSeparator()
+        save_action = QAction("Save", self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.triggered.connect(self._save)
+        toolbar.addAction(save_action)
+
+        toolbar.addSeparator()
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self._open_settings)
+        toolbar.addAction(settings_action)
+
+
+    def _on_file_activated(self, index: QModelIndex) -> None:
+        path = Path(self.fs_model.filePath(index))
+        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+            return
+        self.open_image(path)
+
+
+    def open_image(self, path: Path) -> None:
+        self._finish_session()  # Save the previous image before opening the new one
+        image = np.asarray(Image.open(path).convert("RGB"))
+        self._show(image)  # Shows raw img while segmentation is running
+        self.statusBar().showMessage(f"Segmenting {path.name}...")
+
+        self.session = None
+        self._pending_path = path
+        worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
+        worker.signals.finished.connect(self._on_segmented)
+        worker.signals.failed.connect(self._on_segment_failed)
+        self.pool.start(worker)
+
+
+    def _save(self) -> None:
+        if self.session is None:
+            return
+        self.session.save()
+        self.statusBar().showMessage(f"Saved {self.session.mask_path}")
+
+
+    def _finish_session(self) -> None:
+        """Save work before leaving current image w/ a confirmation dialog for saving unannotated images"""
+        if self.session is None:
+            return
+        if self.session.dirty:
+            self.session.save()
+        elif not self.session.mask_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Unannotated Image",
+                f"{self.session.image_path.name} has no annotations.\n"
+                f"Save an all-{self.session.classes[0].name} mask?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.session.save()
+
+
+    def closeEvent(self, event: QCloseEvent):
+        self._finish_session()
+        event.accept()
+
+
+    def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
+        if path != self._pending_path:
+            return  # Stale result
+        self._pending_path = None
+        session = AnnotationSession(path, image, labels)
+        self.session = session
+        self._show(session.render_display())  # This way type checker knows this will never be called on None type
+        self.statusBar().showMessage(f"{path.name} - {int(labels.max()) + 1} segments")
+
+
+    def _on_segment_failed(self, path: Path, error: str) -> None:
+        if path != self._pending_path:
+            return
+        self._pending_path = None
+        self.statusBar().showMessage(f"Segmentation failed - {path.name} - {error}")
+
+
+    def _show(self, image: np.ndarray) -> None:
+        self.axes.clear()
+        self.axes.set_axis_off()
+        self.axes.imshow(image)
+        self.canvas.draw_idle()
+
+
+    def _current_class(self) -> int:
+        action = self.class_group.checkedAction()
+        return action.data() if action else 0
+
+
+    def _on_canvas_click(self, event: MouseEvent) -> None:
+        if self.session is None or event.xdata is None or event.ydata is None:
+            return
+        x, y = int(round(event.xdata)), int(round(event.ydata))
+        height, width = self.session.labels.shape
+        if not (0 <= x < width and 0 <= y < height):
+            return
+        class_index = 0 if event.button == MouseButton.RIGHT else self._current_class()  # Right click paints default
+        if self.session.assign(x, y, class_index):
+            self._show(self.session.render_display())
+
+
+    def _undo(self) -> None:
+        if self.session is not None and self.session.undo():
+            self._show(self.session.render_display())
+
+
+    def _redo(self) -> None:
+        if self.session is not None and self.session.redo():
+            self._show(self.session.render_display())
+
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply()
+        config.save(self.settings)
+        if self.session is not None:
+            self.open_image(self.session.image_path)  # For resegmenting on changed settings

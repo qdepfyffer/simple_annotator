@@ -13,7 +13,7 @@ from platformdirs import user_config_dir
 from . import segmentation
 
 APP_NAME = "simple_annotator"
-CONFIG_PATH = Path(user_config_dir(APP_NAME)) / "config.json"
+CONFIG_PATH = Path(user_config_dir(APP_NAME, appauthor=False)) / "config.json"
 
 
 def _default_params() -> dict[str, dict]:
