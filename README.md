@@ -95,7 +95,10 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 7. This tool does not write to disk on every click. Could this lose you progress? Maybe. Does it cut the number of disk writes the tool does? Yeah, potentially by a ridiculous amount. Instead, saving is done either manually (via the save button or your platform's default 'Save' key command) or on switching images / closing the tool.
 8. This tool does not immediately create a mask for an opened image. It only creates a mask once the first superpixel is colored. This means if you accidentally open an image it won't create unwanted images. This comes with an added dialog when switching away from the current image or closing the tool when no annotations have been made for the current image. This dialog asks if the user really wants to save a mask with zero annotations. 
 
-## What's to come
+## What's to come 
+
+*(I'll cross these off as they're added or something)*
+
 * Zooming, if possible, to help with annotations
 * Easier between-image navigation to further help speed up annotation
 * A button to reset the mask
@@ -106,4 +109,4 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 
 ## Note
 
-None of this is meant as a dig at the old tool. It still worked for what we needed it for. However, maintenance of said tool seems to have fallen by the wayside as contributors have come and gone, and I felt like it was time for some more modern tooling. Also, I needed something to do. 
+None of this is meant as a dig at the old tool. It still worked for what we needed it for. However, maintenance of said tool seems to have fallen by the wayside as contributors have come and gone, and I felt like it was time for something more efficient and modern. Also, I needed something to do. 
