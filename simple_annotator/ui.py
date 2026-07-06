@@ -41,7 +41,7 @@ class SegmentWorker(QRunnable):
         finished = Signal(Path, np.ndarray, np.ndarray)  # path, img, lbl
         failed = Signal(Path, str)
 
-    def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: dict) -> None:
+    def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: segmentation.ParamValues) -> None:
         super().__init__()
         self.path = path
         self.image = image

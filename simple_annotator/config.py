@@ -16,7 +16,7 @@ APP_NAME = "simple_annotator"
 CONFIG_PATH = Path(user_config_dir(APP_NAME, appauthor=False)) / "config.json"
 
 
-def _default_params() -> dict[str, dict[str, float]]:
+def _default_params() -> dict[str, segmentation.ParamValues]:
     """Fresh default parameters for all registered segmentation algorithms"""
     return {key: seg.defaults() for key, seg in segmentation.REGISTRY.items()}
 
@@ -24,9 +24,9 @@ def _default_params() -> dict[str, dict[str, float]]:
 @dataclass
 class Settings:
     segmenter: str = "slic"
-    params: dict[str, dict[str, float]] = field(default_factory=_default_params)
+    params: dict[str, segmentation.ParamValues] = field(default_factory=_default_params)
 
-    def segmenter_params(self) -> dict[str, float]:
+    def segmenter_params(self) -> segmentation.ParamValues:
         """Parameters for the current segmenter"""
         return self.params[self.segmenter]
 

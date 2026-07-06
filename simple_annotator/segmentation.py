@@ -13,6 +13,8 @@ import numpy as np
 from skimage.segmentation import slic as _slic
 from skimage.util import img_as_float
 
+type ParamValues = dict[str, float]
+
 
 @dataclass(frozen=True)
 class Param:
@@ -33,18 +35,17 @@ class Segmenter:
     params: tuple[Param, ...]
     func: Callable[..., np.ndarray]
 
-    def defaults(self) -> dict[str, float]:
+    def defaults(self) -> ParamValues:
         return {p.key: p.default for p in self.params}
 
 
 REGISTRY: dict[str, Segmenter] = {}
 
-
 def register(segmenter: Segmenter) -> None:
     REGISTRY[segmenter.key] = segmenter
 
 
-def run_segmenter(key: str, image: np.ndarray, params: dict) -> np.ndarray:
+def run_segmenter(key: str, image: np.ndarray, params: ParamValues) -> np.ndarray:
     """Run the named segmenter on an RGB image, returning a 2-D label array"""
     segmenter = REGISTRY[key]
     return segmenter.func(img_as_float(image), **params)
