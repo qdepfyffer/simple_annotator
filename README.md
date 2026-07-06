@@ -71,7 +71,7 @@ The config file should live at:
 
 \* respects `$XDG_CONFIG_HOME` if set.
 
-Changing the settings mid-annotation will re-segment the image and attempt to rebuild the mask with the new settings.
+Changing the settings mid-annotation will re-segment the image and attempt to rebuild the mask with the new settings. Since the mask gets rebuilt on a change of settings, the undo / redo queues end up being cleared as well. This is intended behavior.
 
 Deleting the file resets all settings to defaults.
 
@@ -106,7 +106,7 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 * Caching of the superpixel border overlay
 * Setting for superpixel border overlay color
 * Better scaling of superpixel border overlay on smaller images
-* A button to audit annotation progress (how many labels have been completed)
+* ~~A button to audit annotation progress (how many labels have been completed)~~
 * Other segmentation algorithms
 * Mystery features I haven't thought of yet
 

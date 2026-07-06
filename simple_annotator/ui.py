@@ -37,9 +37,11 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 class SegmentWorker(QRunnable):
     """Runs a segmenter on a background thread and signals resulting labels"""
 
+
     class Signals(QObject):
         finished = Signal(Path, np.ndarray, np.ndarray)  # path, img, lbl
         failed = Signal(Path, str)
+
 
     def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: segmentation.ParamValues) -> None:
         super().__init__()
@@ -48,6 +50,7 @@ class SegmentWorker(QRunnable):
         self.segmenter = segmenter
         self.params = params
         self.signals = self.Signals()
+
 
     @Slot()
     def run(self) -> None:
@@ -61,6 +64,7 @@ class SegmentWorker(QRunnable):
 
 class SettingsDialog(QDialog):
     """Edit segmenter choice and its parameters (determined by segmenter parameter metadata)"""
+
 
     def __init__(self, settings: config.Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,10 +141,11 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main window for the annotator"""
 
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Simple Annotator")
-        self.resize(800, 600)
+        self.resize(1280, 720)
 
         self.settings = config.load()
         self.pool = QThreadPool().globalInstance()
@@ -238,20 +243,6 @@ class MainWindow(QMainWindow):
         self.open_image(path)
 
 
-    def open_image(self, path: Path) -> None:
-        self._finish_session()  # Save the previous image before opening the new one
-        image = np.asarray(Image.open(path).convert("RGB"))
-        self._show(image)  # Shows raw img while segmentation is running
-        self.statusBar().showMessage(f"Segmenting {path.name}...")
-
-        self.session = None
-        self._pending_path = path
-        worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
-        worker.signals.finished.connect(self._on_segmented)
-        worker.signals.failed.connect(self._on_segment_failed)
-        self.pool.start(worker)
-
-
     def _save(self) -> None:
         if self.session is None:
             return
@@ -276,11 +267,6 @@ class MainWindow(QMainWindow):
             )
             if answer == QMessageBox.StandardButton.Yes:
                 self.session.save()
-
-
-    def closeEvent(self, event: QCloseEvent):
-        self._finish_session()
-        event.accept()
 
 
     def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
@@ -342,3 +328,22 @@ class MainWindow(QMainWindow):
         config.save(self.settings)
         if self.session is not None:
             self.open_image(self.session.image_path)  # For resegmenting on changed settings
+
+
+    def closeEvent(self, event: QCloseEvent):
+        self._finish_session()
+        event.accept()
+
+
+    def open_image(self, path: Path) -> None:
+        self._finish_session()  # Save the previous image before opening the new one
+        image = np.asarray(Image.open(path).convert("RGB"))
+        self._show(image)  # Shows raw img while segmentation is running
+        self.statusBar().showMessage(f"Segmenting {path.name}...")
+
+        self.session = None
+        self._pending_path = path
+        worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
+        worker.signals.finished.connect(self._on_segmented)
+        worker.signals.failed.connect(self._on_segment_failed)
+        self.pool.start(worker)
