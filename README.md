@@ -96,11 +96,13 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 8. This tool does not immediately create a mask for an opened image. It only creates a mask once the first superpixel is colored. This means if you accidentally open an image it won't create unwanted images. This comes with an added dialog when switching away from the current image or closing the tool when no annotations have been made for the current image. This dialog asks if the user really wants to save a mask with zero annotations. 
 
 ## What's to come
-* Zooming, if possible, to help with annot
+* Zooming, if possible, to help with annotations
+* Easier between-image navigation to further help speed up annotation
 * A button to reset the mask
 * Caching of the superpixel border overlay
 * A button to audit annotation progress (how many labels have been completed)
-* Mystery features I haven't thought of yet.
+* Other segmentation algorithms
+* Mystery features I haven't thought of yet
 
 ## Note
 
