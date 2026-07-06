@@ -32,3 +32,11 @@ def load_mask(path: Path) -> np.ndarray | None:
     if not path.exists():
         return None
     return np.asarray(Image.open(path).convert("RGB"))
+
+
+def count_annotated(image_dir: Path | str, extensions: set[str]) -> tuple[int, int]:
+    """Count how many images in a folder already have masks"""
+    image_dir = Path(image_dir)
+    images = [p for p in image_dir.iterdir() if p.suffix.lower() in extensions]
+    done = sum(1 for p in images if mask_path(p).exists())
+    return done, len(images)

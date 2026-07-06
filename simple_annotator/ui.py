@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from . import config, segmentation
 from .annotation import DEFAULT_CLASSES, AnnotationSession
+from .mask import count_annotated
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
@@ -76,9 +77,10 @@ class SettingsDialog(QDialog):
 
         self.form = QFormLayout()
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        buttons = QDialogButtonBox()
+        # Below is not strictly ideal Qt API, but it shuts up an incorrect inspector warning
+        buttons.addButton(QDialogButtonBox.StandardButton.Ok)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -207,6 +209,26 @@ class MainWindow(QMainWindow):
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self._open_settings)
         toolbar.addAction(settings_action)
+
+        progress_action = QAction("Progress", self)
+        progress_action.triggered.connect(self._show_progress)
+        toolbar.addAction(progress_action)
+
+
+    def _show_progress(self) -> None:
+        if self.session is not None:
+            folder = self.session.image_path.parent
+        elif self._pending_path is not None:
+            folder = self._pending_path.parent
+        else:
+            self.statusBar().showMessage("No image selected")
+            return
+        done, total = count_annotated(folder, IMAGE_EXTENSIONS)
+        QMessageBox.information(
+            self,
+            "Annotation Progress",
+            f"{folder.name}: {done} of {total} images annotated ({done / total:.0%})",
+        )
 
 
     def _on_file_activated(self, index: QModelIndex) -> None:
