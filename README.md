@@ -57,6 +57,23 @@ simple-annotator
 
 (Alternatively: 'python -m simple_annotator')
 
+## How to use
+
+Once Simple Annotator opens, you'll see a file browser on the left and a blank canvas on the right.
+
+1. Navigate to the image you wish to annotate using the file browser, and double click it. This will open the image on the previously blank canvas.
+2. Simple Annotator will automatically run the image segmentation algorithm that is selected in its settings.
+3. Once the image is segmented, left click on any superpixel to label it. Initially, the first non-default class will be selected.
+    * Classes can be switched between via the right side of the toolbar.
+    * Right-clicking a superpixel will reset its label to the default class.
+4. Once you are done annotating the image, you can save your progress via:
+   1. `Ctrl + S` / `Cmd + S`, or the button on the toolbar
+   2. Navigating away from the current image to a new image
+   3. Closing Simple Annotator
+5. To check your progress, click the 'Progress' button on the toolbar. This will open a dialog showing the progress for the current folder.
+
+If you ever want to go back to edit a mask, you can do so simply by re-opening the image whose mask you want to edit. This does come with the side effect that segmentation algorithms need to behave deterministically, otherwise the masks will be rebuilt incorrectly. Any implemented non-deterministic segmentation algorithms should have any random seeds pinned to a static value.
+
 ## Configuration
 
 Settings (selected segmentation algorithm and parameters) can be edited in the settings panel, accessible via the 'Settings' button on the toolbar. Settings are saved automatically and persist between runs.
