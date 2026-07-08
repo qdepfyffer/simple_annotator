@@ -41,6 +41,7 @@ class AnnotationSession:
         self._undo: list[tuple[int, int, int]] = []
         self._redo: list[tuple[int, int, int]] = []
         self.dirty = False
+        self.load_warning: str | None = None  # Error message to show user when a load issue occurs
 
         self._load_existing()
 
@@ -96,14 +97,16 @@ class AnnotationSession:
 
     # === PERSISTENCE ==================================================================================================
 
-    def save(self) -> None:
-        save_mask(self.render_mask(), self.mask_path)
-        self.dirty = False
-
     def _load_existing(self) -> None:
         """Reconstruct assignments from existing mask"""
         existing = load_mask(self.mask_path)
-        if existing is None or existing.shape[:2] != self.image.shape[:2]:
+        if existing is None:
+            return
+        if existing.shape[:2] != self.image.shape[:2]:
+            mask_h, mask_w = existing.shape[:2]
+            image_h, image_w = self.image.shape[:2]
+            self.load_warning = (f"Existing mask {self.mask_path.name} is {mask_w}x{mask_h} "
+                                 f"but the image is {image_w}x{image_h}, so it was not loaded.")  # Shape mismatch err
             return
         flat_labels = self.labels.ravel()
         flat_mask = existing.reshape(-1, 3)
@@ -112,3 +115,8 @@ class AnnotationSession:
         color_to_class: dict[tuple[int, ...], int] = {tuple(c.color): i for i, c in enumerate(self.classes)}
         for sid, color in zip(uniq, rep_colors):
             self.segment_class[sid] = color_to_class.get(tuple(int(v) for v in color), 0)
+
+
+    def save(self) -> None:
+        save_mask(self.render_mask(), self.mask_path)
+        self.dirty = False

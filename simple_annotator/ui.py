@@ -220,6 +220,111 @@ class MainWindow(QMainWindow):
         toolbar.addAction(progress_action)
 
 
+    def _current_class(self) -> int:
+        action = self.class_group.checkedAction()
+        return action.data() if action else 0
+
+
+    def _finish_session(self) -> None:
+        """Save work before leaving current image w/ a confirmation dialog for saving unannotated images"""
+        if self.session is None:
+            return
+        if self.session.dirty:
+            self._try_save(self.session)
+        elif not self.session.mask_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Unannotated Image",
+                f"{self.session.image_path.name} has no annotations.\n"
+                f"Save an all-{self.session.classes[0].name} mask?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._try_save(self.session)
+
+
+    def _on_canvas_click(self, event: MouseEvent) -> None:
+        if self.session is None or event.xdata is None or event.ydata is None:
+            return
+        x, y = int(round(event.xdata)), int(round(event.ydata))
+        height, width = self.session.labels.shape
+        if not (0 <= x < width and 0 <= y < height):
+            return
+        class_index = 0 if event.button == MouseButton.RIGHT else self._current_class()  # Right click paints default
+        if self.session.assign(x, y, class_index):
+            self._show(self.session.render_display())
+
+
+    def _on_file_activated(self, index: QModelIndex) -> None:
+        path = Path(self.fs_model.filePath(index))
+        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+            return
+        self.open_image(path)
+
+
+    def _on_segment_failed(self, path: Path, error: str) -> None:
+        if path != self._pending_path:
+            return
+        self._pending_path = None
+        self.statusBar().showMessage(f"Segmentation failed - {path.name} - {error}")
+
+
+    def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
+        if path != self._pending_path:
+            return  # Stale result
+        self._pending_path = None
+        session = AnnotationSession(path, image, labels)
+        self.session = session
+        self._show(session.render_display())  # This way type checker knows this will never be called on None type
+        if session.load_warning is not None:
+            QMessageBox.warning(self,
+                                "Mask Not Loaded",
+                                session.load_warning + "\nSaving will overwrite the existing mask.")
+        self.statusBar().showMessage(f"{path.name} - {int(labels.max()) + 1} segments")
+
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply()
+        config.save(self.settings)
+        if self.session is not None:
+            self.open_image(self.session.image_path)  # For resegmenting on changed settings
+
+
+    def _redo(self) -> None:
+        if self.session is not None and self.session.redo():
+            self._show(self.session.render_display())
+
+
+    def _save(self) -> None:
+        if self.session is None:
+            return
+        if self._try_save(self.session):
+            self.statusBar().showMessage(f"Saved {self.session.mask_path}")
+        else:
+            self.statusBar().showMessage(f"Could not save {self.session.mask_path}")
+
+
+    def _show(self, image: np.ndarray) -> None:
+        self.axes.clear()
+        self.axes.set_axis_off()
+        self.axes.imshow(image)
+        self.canvas.draw_idle()
+
+
+    def _try_save(self, session: AnnotationSession) -> bool:
+        """Try to save session mask and push up filesystem errors that otherwise die quietly"""
+        try:
+            session.save()
+        except OSError as e:
+            QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
+            return False
+        return True
+
+
     def _show_progress(self) -> None:
         if self.session is not None:
             folder = self.session.image_path.parent
@@ -236,98 +341,9 @@ class MainWindow(QMainWindow):
         )
 
 
-    def _on_file_activated(self, index: QModelIndex) -> None:
-        path = Path(self.fs_model.filePath(index))
-        if path.suffix.lower() not in IMAGE_EXTENSIONS:
-            return
-        self.open_image(path)
-
-
-    def _save(self) -> None:
-        if self.session is None:
-            return
-        self.session.save()
-        self.statusBar().showMessage(f"Saved {self.session.mask_path}")
-
-
-    def _finish_session(self) -> None:
-        """Save work before leaving current image w/ a confirmation dialog for saving unannotated images"""
-        if self.session is None:
-            return
-        if self.session.dirty:
-            self.session.save()
-        elif not self.session.mask_path.exists():
-            answer = QMessageBox.question(
-                self,
-                "Unannotated Image",
-                f"{self.session.image_path.name} has no annotations.\n"
-                f"Save an all-{self.session.classes[0].name} mask?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                self.session.save()
-
-
-    def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
-        if path != self._pending_path:
-            return  # Stale result
-        self._pending_path = None
-        session = AnnotationSession(path, image, labels)
-        self.session = session
-        self._show(session.render_display())  # This way type checker knows this will never be called on None type
-        self.statusBar().showMessage(f"{path.name} - {int(labels.max()) + 1} segments")
-
-
-    def _on_segment_failed(self, path: Path, error: str) -> None:
-        if path != self._pending_path:
-            return
-        self._pending_path = None
-        self.statusBar().showMessage(f"Segmentation failed - {path.name} - {error}")
-
-
-    def _show(self, image: np.ndarray) -> None:
-        self.axes.clear()
-        self.axes.set_axis_off()
-        self.axes.imshow(image)
-        self.canvas.draw_idle()
-
-
-    def _current_class(self) -> int:
-        action = self.class_group.checkedAction()
-        return action.data() if action else 0
-
-
-    def _on_canvas_click(self, event: MouseEvent) -> None:
-        if self.session is None or event.xdata is None or event.ydata is None:
-            return
-        x, y = int(round(event.xdata)), int(round(event.ydata))
-        height, width = self.session.labels.shape
-        if not (0 <= x < width and 0 <= y < height):
-            return
-        class_index = 0 if event.button == MouseButton.RIGHT else self._current_class()  # Right click paints default
-        if self.session.assign(x, y, class_index):
-            self._show(self.session.render_display())
-
-
     def _undo(self) -> None:
         if self.session is not None and self.session.undo():
             self._show(self.session.render_display())
-
-
-    def _redo(self) -> None:
-        if self.session is not None and self.session.redo():
-            self._show(self.session.render_display())
-
-
-    def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        dialog.apply()
-        config.save(self.settings)
-        if self.session is not None:
-            self.open_image(self.session.image_path)  # For resegmenting on changed settings
 
 
     def closeEvent(self, event: QCloseEvent):

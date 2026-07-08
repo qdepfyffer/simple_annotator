@@ -9,10 +9,25 @@ from PIL import Image
 MASK_SUFFIX = "_L"
 
 
+def count_annotated(image_dir: Path | str, extensions: set[str]) -> tuple[int, int]:
+    """Count how many images in a folder already have masks"""
+    image_dir = Path(image_dir)
+    images = [p for p in image_dir.iterdir() if p.suffix.lower() in extensions]
+    done = sum(1 for p in images if mask_path(p).exists())
+    return done, len(images)
+
+
 def labels_dir(image_path: Path) -> Path:
     """Sibling folder for image masks: <parent>_labels"""
     parent = image_path.parent
     return parent.parent / (parent.name + "_labels")
+
+
+def load_mask(path: Path) -> np.ndarray | None:
+    """Load RGB mask if it exists"""
+    if not path.exists():
+        return None
+    return np.asarray(Image.open(path).convert("RGB"))
 
 
 def mask_path(image_path: Path) -> Path:
@@ -25,18 +40,3 @@ def save_mask(mask: np.ndarray, path: Path) -> None:
     """Write RGB mask array to disk and create labels folder if necessary"""
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(mask).save(path)
-
-
-def load_mask(path: Path) -> np.ndarray | None:
-    """Load RGB mask if it exists"""
-    if not path.exists():
-        return None
-    return np.asarray(Image.open(path).convert("RGB"))
-
-
-def count_annotated(image_dir: Path | str, extensions: set[str]) -> tuple[int, int]:
-    """Count how many images in a folder already have masks"""
-    image_dir = Path(image_dir)
-    images = [p for p in image_dir.iterdir() if p.suffix.lower() in extensions]
-    done = sum(1 for p in images if mask_path(p).exists())
-    return done, len(images)

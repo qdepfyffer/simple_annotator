@@ -125,6 +125,7 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 * Better scaling of superpixel border overlay on smaller images
 * ~~A button to audit annotation progress (how many labels have been completed)~~
 * Other segmentation algorithms
+* More settings
 * Mystery features I haven't thought of yet
 
 ## Note
