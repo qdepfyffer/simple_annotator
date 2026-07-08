@@ -4,16 +4,18 @@ Qt user interface for the annotator
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-import numpy as np
+
 from matplotlib.backend_bases import MouseButton, MouseEvent
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+import numpy as np
 from PIL import Image
 from PySide6.QtCore import (
     QDir, QModelIndex, QObject,
-    QRunnable, QThreadPool, Signal,
-    Slot,
+    QRunnable, QSortFilterProxyModel, QThreadPool,
+    Signal, Slot,
 )
 from PySide6.QtGui import (
     QAction, QActionGroup, QKeySequence,
@@ -32,6 +34,27 @@ from .annotation import DEFAULT_CLASSES, AnnotationSession
 from .mask import count_annotated
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+
+class ImageDirProxy(QSortFilterProxyModel):
+    """Hide useless (no imgs or subdirectories) folders"""
+
+    def __init__(self, fs_model: QFileSystemModel) -> None:
+        super().__init__()
+        self.fs_model = fs_model
+        self.setSourceModel(fs_model)
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        index = self.fs_model.index(source_row, 0, source_parent)
+        if not self.fs_model.isDir(index):
+            # Only show files with valid extensions
+            return Path(self.fs_model.fileName(index)).suffix.lower() in IMAGE_EXTENSIONS
+        try:
+            with os.scandir(self.fs_model.filePath(index)) as entries:
+                # Hide any useless folders
+                return any(e.is_dir() or Path(e.name).suffix.lower() in IMAGE_EXTENSIONS for e in entries)
+        except OSError:
+            return False
 
 
 class SegmentWorker(QRunnable):
@@ -156,8 +179,9 @@ class MainWindow(QMainWindow):
         self.fs_model = QFileSystemModel()
         self.fs_model.setRootPath(QDir.homePath())
         self.tree = QTreeView()
-        self.tree.setModel(self.fs_model)
-        self.tree.setRootIndex(self.fs_model.index(QDir.homePath()))
+        self.proxy = ImageDirProxy(self.fs_model)
+        self.tree.setModel(self.proxy)
+        self.tree.setRootIndex(self.proxy.mapFromSource(self.fs_model.index(QDir.homePath())))
         for column in range(1, self.fs_model.columnCount()):
             self.tree.hideColumn(column)
         self.tree.activated.connect(self._on_file_activated)
@@ -257,7 +281,7 @@ class MainWindow(QMainWindow):
 
 
     def _on_file_activated(self, index: QModelIndex) -> None:
-        path = Path(self.fs_model.filePath(index))
+        path = Path(self.fs_model.filePath(self.proxy.mapToSource(index)))
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             return
         self.open_image(path)
@@ -353,7 +377,7 @@ class MainWindow(QMainWindow):
 
     def open_image(self, path: Path) -> None:
         self._finish_session()  # Save the previous image before opening the new one
-        image = np.asarray(Image.open(path).convert("RGB"))
+        image = np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
         self._show(image)  # Shows raw img while segmentation is running
         self.statusBar().showMessage(f"Segmenting {path.name}...")
 

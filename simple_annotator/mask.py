@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import numpy as np
 from PIL import Image
 
@@ -27,7 +28,7 @@ def load_mask(path: Path) -> np.ndarray | None:
     """Load RGB mask if it exists"""
     if not path.exists():
         return None
-    return np.asarray(Image.open(path).convert("RGB"))
+    return np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
 
 
 def mask_path(image_path: Path) -> Path:
