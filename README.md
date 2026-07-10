@@ -72,6 +72,15 @@ Once Simple Annotator opens, you'll see a file browser on the left and a blank c
    3. Closing Simple Annotator
 5. To check your progress, click the 'Progress' button on the toolbar. This will open a dialog showing the progress for the current folder.
 
+## Guidelines for proper annotation *
+
+* Click on ALL sunlit leaves
+* Completely avoid selecting superpixels containing the ground
+* Completely avoid selecting superpixels containing fruit, even if they are sunlit
+* Only select superpixels containing the sky if they are at least 75% leaf and only if it is worth selecting said leaves
+
+\* Copied with edits from https://github.com/AIISLab/Sunlit-leaf-annotator
+
 If you ever want to go back to edit a mask, you can do so simply by re-opening the image whose mask you want to edit. This does come with the side effect that segmentation algorithms need to behave deterministically, otherwise the masks will be rebuilt incorrectly. Any implemented non-deterministic segmentation algorithms should have any random seeds pinned to a static value.
 
 ## Configuration
