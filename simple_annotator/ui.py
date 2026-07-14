@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 
 from matplotlib.backend_bases import MouseButton, MouseEvent
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -174,6 +175,10 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool().globalInstance()
         self.session: AnnotationSession | None = None
         self._pending_path: Path | None = None
+        self._image_artist = None
+        self._display_image: np.ndarray | None = None
+        self._pan_anchor: tuple[float, float] | None = None
+        self._last_pan_draw = 0.0
         
         # === FILE BROWSER =============================================================================================
         self.fs_model = QFileSystemModel()
@@ -190,10 +195,13 @@ class MainWindow(QMainWindow):
         background = self.palette().color(QPalette.ColorRole.Window).name()
         self.figure = Figure(facecolor=background)
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
+        self.canvas.mpl_connect("button_press_event", self._on_canvas_press)
+        self.canvas.mpl_connect("scroll_event", self._on_scroll)
+        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+        self.canvas.mpl_connect("button_release_event", self._on_release)
         self.axes = self.figure.add_axes((0, 0, 1, 1))
         self.axes.set_axis_off()
-        
+
         splitter = QSplitter()
         splitter.addWidget(self.tree)
         splitter.addWidget(self.canvas)
@@ -239,9 +247,15 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self._open_settings)
         toolbar.addAction(settings_action)
 
+        toolbar.addSeparator()
         progress_action = QAction("Progress", self)
         progress_action.triggered.connect(self._show_progress)
         toolbar.addAction(progress_action)
+
+        toolbar.addSeparator()
+        reset_action = QAction("Reset View", self)
+        reset_action.triggered.connect(self._reset_view)
+        toolbar.addAction(reset_action)
 
 
     def _current_class(self) -> int:
@@ -269,16 +283,14 @@ class MainWindow(QMainWindow):
                 self._try_save(self.session)
 
 
-    def _on_canvas_click(self, event: MouseEvent) -> None:
-        if self.session is None or event.xdata is None or event.ydata is None:
+    def _on_canvas_press(self, event: MouseEvent) -> None:
+        if event.xdata is None or event.ydata is None:
             return
-        x, y = int(round(event.xdata)), int(round(event.ydata))
-        height, width = self.session.labels.shape
-        if not (0 <= x < width and 0 <= y < height):
-            return
-        class_index = 0 if event.button == MouseButton.RIGHT else self._current_class()  # Right click paints default
-        if self.session.assign(x, y, class_index):
-            self._show(self.session.render_display())
+        if event.button == MouseButton.MIDDLE:
+            self._pan_anchor = (event.xdata, event.ydata)
+        elif event.button in (MouseButton.LEFT, MouseButton.RIGHT):
+            class_index = 0 if event.button == MouseButton.RIGHT else self._current_class()
+            self._paint(event.xdata, event.ydata, class_index)
 
 
     def _on_file_activated(self, index: QModelIndex) -> None:
@@ -286,6 +298,42 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             return
         self.open_image(path)
+
+
+    def _on_motion(self, event: MouseEvent) -> None:
+        if self._pan_anchor is None or event.xdata is None or event.ydata is None:
+            return
+        now = time.monotonic()  # For throttling panning to avoid event flooding
+        if now - self._last_pan_draw < 0.03:
+            return
+        self._last_pan_draw = now
+        dx = event.xdata - self._pan_anchor[0]
+        dy = event.ydata - self._pan_anchor[1]
+        x0, x1 = self.axes.get_xlim()
+        y0, y1 = self.axes.get_ylim()
+        self.axes.set_xlim(x0 - dx, x1 - dx)
+        self.axes.set_ylim(y0 - dy, y1 - dy)
+        self._update_viewport()
+        self.canvas.draw_idle()
+
+
+    def _on_release(self, event: MouseEvent) -> None:
+        if event.button == MouseButton.MIDDLE:
+            self._pan_anchor = None  # Reset the pan anchor
+
+
+    def _on_scroll(self, event: MouseEvent) -> None:
+        if event.inaxes is not self.axes or event.xdata is None or event.ydata is None:
+            return
+        factor = 1 / 1.2 if event.step > 0 else 1.2
+        x0, x1 = self.axes.get_xlim()
+        y0, y1 = self.axes.get_ylim()
+        self.axes.set_xlim(event.xdata + (x0 - event.xdata) * factor,
+                           event.xdata + (x1 - event.xdata) * factor)
+        self.axes.set_ylim(event.ydata + (y0 - event.ydata) * factor,
+                           event.ydata + (y1 - event.ydata) * factor)
+        self._update_viewport()
+        self.canvas.draw_idle()
 
 
     def _on_segment_failed(self, path: Path, error: str) -> None:
@@ -319,6 +367,17 @@ class MainWindow(QMainWindow):
             self.open_image(self.session.image_path)  # For resegmenting on changed settings
 
 
+    def _paint(self, x: float, y: float, class_index: int) -> None:
+        if self.session is None:
+            return
+        column, row = int(round(x)), int(round(y))
+        height, width = self.session.labels.shape
+        if not (0 <= column < width and 0 <= row < height):
+            return
+        if self.session.assign(column, row, class_index):
+            self._show(self.session.render_display())
+
+
     def _redo(self) -> None:
         if self.session is not None and self.session.redo():
             self._show(self.session.render_display())
@@ -333,22 +392,26 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Could not save {self.session.mask_path}")
 
 
-    def _show(self, image: np.ndarray) -> None:
-        self.axes.clear()
-        self.axes.set_axis_off()
-        self.axes.imshow(image)
+    def _reset_view(self) -> None:
+        if self._display_image is None:
+            return
+        height, width = self._display_image.shape[:2]
+        self.axes.set_xlim(-0.5, width - 0.5)
+        self.axes.set_ylim(height - 0.5, -0.5)  # Inverted for images
+        self._update_viewport()
         self.canvas.draw_idle()
 
 
-    def _try_save(self, session: AnnotationSession) -> bool:
-        """Try to save session mask and push up filesystem errors that otherwise die quietly"""
-        try:
-            session.save()
-        except OSError as e:
-            QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
-            return False
-        return True
-
+    def _show(self, image: np.ndarray) -> None:
+        self._display_image = image
+        if self._image_artist is None:
+            self.axes.clear()
+            self.axes.set_axis_off()
+            self._image_artist = self.axes.imshow(image, interpolation="nearest")
+            self.axes.set_aspect("equal", adjustable="datalim")
+        else:
+            self._update_viewport()
+        self.canvas.draw_idle()
 
     def _show_progress(self) -> None:
         if self.session is not None:
@@ -366,9 +429,37 @@ class MainWindow(QMainWindow):
         )
 
 
+    def _try_save(self, session: AnnotationSession) -> bool:
+        """Try to save session mask and push up filesystem errors that otherwise die quietly"""
+        try:
+            session.save()
+        except OSError as e:
+            QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
+            return False
+        return True
+
+
     def _undo(self) -> None:
         if self.session is not None and self.session.undo():
             self._show(self.session.render_display())
+            
+            
+    def _update_viewport(self) -> None:
+        """Give the artist only the visible region of the image"""
+        if self._display_image is None or self._image_artist is None:
+            return
+        height, width = self._display_image.shape[:2]
+        x0, x1 = self.axes.get_xlim()
+        y1, y0 = self.axes.get_ylim()  # Inverted for images
+        col0, col1 = max(int(x0), 0), min(int(x1) + 2, width)
+        row0, row1 = max(int(y0), 0), min(int(y1) + 2, height)
+        if col1 <= col0 or row1 <= row0:
+            return  # No part of the image is visible
+        step = max(1, round((col1 - col0) / self.axes.bbox.width), round((row1 - row0) / self.axes.bbox.height))
+        view = self._display_image[row0:row1:step, col0:col1:step]
+        self._image_artist.set_data(view)
+        self._image_artist.set_extent((col0 - 0.5, col0 + view.shape[1] * step - 0.5,
+                                      row0 + view.shape[0] * step - 0.5, row0 - 0.5))
 
 
     def closeEvent(self, event: QCloseEvent):
@@ -379,6 +470,7 @@ class MainWindow(QMainWindow):
     def open_image(self, path: Path) -> None:
         self._finish_session()  # Save the previous image before opening the new one
         image = np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
+        self._image_artist = None  # Reset signal
         self._show(image)  # Shows raw img while segmentation is running
         self.statusBar().showMessage(f"Segmenting {path.name}...")
 
