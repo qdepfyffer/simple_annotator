@@ -253,9 +253,10 @@ class MainWindow(QMainWindow):
         """Save work before leaving current image w/ a confirmation dialog for saving unannotated images"""
         if self.session is None:
             return
-        if self.session.dirty:
-            self._try_save(self.session)
-        elif not self.session.mask_path.exists():
+        if self.session.annotated:
+            if self.session.dirty:
+                self._try_save(self.session)
+        elif self.session.dirty or not self.session.mask_path.exists():
             answer = QMessageBox.question(
                 self,
                 "Unannotated Image",

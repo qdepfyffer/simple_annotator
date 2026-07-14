@@ -45,6 +45,11 @@ class AnnotationSession:
 
         self._load_existing()
 
+    @property
+    def annotated(self) -> bool:
+        """True if session has any non-default superpixel annotations"""
+        return bool(self.segment_class.any())
+
     # === EDITING ======================================================================================================
 
     def assign(self, x: int, y: int, class_index: int) -> bool:
