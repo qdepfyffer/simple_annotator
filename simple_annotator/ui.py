@@ -191,7 +191,7 @@ class MainWindow(QMainWindow):
         self.figure = Figure(facecolor=background)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
-        self.axes = self.figure.add_subplot()
+        self.axes = self.figure.add_axes((0, 0, 1, 1))
         self.axes.set_axis_off()
         
         splitter = QSplitter()
