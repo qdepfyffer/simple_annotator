@@ -7,6 +7,7 @@ Stores selected segmenter and per-segmenter parameters as JSON in your platform'
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from platformdirs import user_config_dir
@@ -25,6 +26,7 @@ def _default_params() -> dict[str, segmentation.ParamValues]:
 class Settings:
     segmenter: str = "slic"
     params: dict[str, segmentation.ParamValues] = field(default_factory=_default_params)
+    boundary_color: str = "#ffff00"
 
     def segmenter_params(self) -> segmentation.ParamValues:
         """Parameters for the current segmenter"""
@@ -51,6 +53,10 @@ def load() -> Settings:
             if param_key in saved.get(seg_key, {}):
                 seg_params[param_key] = saved[seg_key][param_key]
 
+    color = data.get("boundary_color")
+    if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color):  # I love regex
+        settings.boundary_color = color
+
     return settings
 
 
@@ -61,7 +67,8 @@ def save(settings: Settings) -> None:
         json.dumps(
             {
                 "segmenter": settings.segmenter,
-                "params": settings.params
+                "params": settings.params,
+                "boundary_color": settings.boundary_color,
             },
             indent=2
         )

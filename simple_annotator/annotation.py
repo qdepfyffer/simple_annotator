@@ -91,13 +91,16 @@ class AnnotationSession:
         """Opaque RGB mask that gets saved where pixels are colored by their classes"""
         return self._colors()[self.segment_class][self.labels]
 
-    def render_display(self, boundary_color: tuple[int, int, int] = (1, 1, 0), alpha: float = 0.5) -> np.ndarray:
+    def render_display(self, boundary_color: tuple[float, float, float] = (1, 1, 0), alpha: float = 0.5,
+                       boundaries: bool = True) -> np.ndarray:
         """Image + superpixel borders with non-default segments tinted"""
         display = self.image.astype(np.float64)
         painted_px = (self.segment_class !=0)[self.labels]
         mask_rgb = self.render_mask().astype(np.float64)
         display[painted_px] = (1 - alpha) * display[painted_px] + alpha * mask_rgb[painted_px]
         display = display.astype(np.uint8)
+        if not boundaries:
+            return display  # For allowing user to hide superpixel border overlay
         return img_as_ubyte(mark_boundaries(img_as_float(display), self.labels, color=boundary_color, mode="inner"))
 
     # === PERSISTENCE ==================================================================================================

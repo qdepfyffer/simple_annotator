@@ -19,15 +19,15 @@ from PySide6.QtCore import (
     Signal, Slot,
 )
 from PySide6.QtGui import (
-    QAction, QActionGroup, QKeySequence,
-    QPalette, QCloseEvent,
+    QAction, QActionGroup, QColor,
+    QKeySequence, QPalette, QCloseEvent,
 )
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFormLayout, QFileSystemModel,
-    QMainWindow, QMessageBox, QSpinBox,
-    QSplitter, QTreeView, QVBoxLayout,
-    QWidget,
+    QColorDialog, QComboBox, QDialog,
+    QDialogButtonBox, QDoubleSpinBox, QFormLayout,
+    QFileSystemModel, QMainWindow, QMessageBox,
+    QPushButton, QSpinBox, QSplitter,
+    QTreeView, QVBoxLayout, QWidget,
 )
 
 from . import config, segmentation
@@ -97,6 +97,10 @@ class SettingsDialog(QDialog):
         self._values = {key: dict(params) for key, params in settings.params.items()}
         self._editors: dict[str, QSpinBox | QDoubleSpinBox] = {}
         self._form_key = settings.segmenter
+        self._boundary_color = QColor(settings.boundary_color)
+        self.color_button = QPushButton()
+        self.color_button.clicked.connect(self._pick_color)
+        self._update_swatch()
 
         self.combo = QComboBox()
         for key, seg in segmentation.REGISTRY.items():
@@ -104,6 +108,9 @@ class SettingsDialog(QDialog):
         self.combo.setCurrentIndex(self.combo.findData(settings.segmenter))
 
         self.form = QFormLayout()
+
+        options = QFormLayout()
+        options.addRow("Boundary color", self.color_button)
 
         buttons = QDialogButtonBox()
         # Below is not strictly ideal Qt API, but it shuts up an incorrect inspector warning
@@ -115,10 +122,22 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.combo)
         layout.addLayout(self.form)
+        layout.addLayout(options)
         layout.addWidget(buttons)
 
         self._build_form()
         self.combo.currentIndexChanged.connect(self._on_segmenter_changed)
+
+
+    def _pick_color(self) -> None:
+        color = QColorDialog.getColor(self._boundary_color, self, "Boundary Color")
+        if color.isValid():
+            self._boundary_color = color
+            self._update_swatch()
+
+
+    def _update_swatch(self) -> None:
+        self.color_button.setStyleSheet(f"background-color: {self._boundary_color.name()};")
 
 
     def _stash(self) -> None:
@@ -160,6 +179,7 @@ class SettingsDialog(QDialog):
         self._stash()
         self.settings.segmenter = self._form_key
         self.settings.params = self._values
+        self.settings.boundary_color = self._boundary_color.name()
 
 
 class MainWindow(QMainWindow):
@@ -257,6 +277,14 @@ class MainWindow(QMainWindow):
         reset_action.triggered.connect(self._reset_view)
         toolbar.addAction(reset_action)
 
+        toolbar.addSeparator()
+        self.borders_action = QAction("Borders", self)
+        self.borders_action.setCheckable(True)
+        self.borders_action.setChecked(True)
+        self.borders_action.setShortcut("B")
+        self.borders_action.toggled.connect(self._toggle_borders)
+        toolbar.addAction(self.borders_action)
+
 
     def _current_class(self) -> int:
         action = self.class_group.checkedAction()
@@ -349,7 +377,7 @@ class MainWindow(QMainWindow):
         self._pending_path = None
         session = AnnotationSession(path, image, labels)
         self.session = session
-        self._show(session.render_display())  # This way type checker knows this will never be called on None type
+        self._show(self._render())
         if session.load_warning is not None:
             QMessageBox.warning(self,
                                 "Mask Not Loaded",
@@ -361,10 +389,15 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        before = (self.settings.segmenter, self.settings.params)
         dialog.apply()
         config.save(self.settings)
-        if self.session is not None:
+        if self.session is None:
+            return
+        if (self.settings.segmenter, self.settings.params) != before:
             self.open_image(self.session.image_path)  # For resegmenting on changed settings
+        else:
+            self._show(self._render())  # Don't resegment if we just change the color
 
 
     def _paint(self, x: float, y: float, class_index: int) -> None:
@@ -375,12 +408,21 @@ class MainWindow(QMainWindow):
         if not (0 <= column < width and 0 <= row < height):
             return
         if self.session.assign(column, row, class_index):
-            self._show(self.session.render_display())
+            self._show(self._render())
 
 
     def _redo(self) -> None:
         if self.session is not None and self.session.redo():
-            self._show(self.session.render_display())
+            self._show(self._render())
+
+
+    def _render(self) -> np.ndarray:
+        assert self.session is not None  # Guarded against everywhere I call it, should never be an issue
+        color = self.settings.boundary_color
+        rgb = (int(color[1:3], 16) / 255,
+               int(color[3:5], 16) / 255,
+               int(color[5:7], 16) / 255)
+        return self.session.render_display(boundary_color=rgb, boundaries=self.borders_action.isChecked())
 
 
     def _save(self) -> None:
@@ -429,6 +471,11 @@ class MainWindow(QMainWindow):
         )
 
 
+    def _toggle_borders(self) -> None:
+        if self.session is not None:
+            self._show(self._render())
+
+
     def _try_save(self, session: AnnotationSession) -> bool:
         """Try to save session mask and push up filesystem errors that otherwise die quietly"""
         try:
@@ -441,7 +488,7 @@ class MainWindow(QMainWindow):
 
     def _undo(self) -> None:
         if self.session is not None and self.session.undo():
-            self._show(self.session.render_display())
+            self._show(self._render())
             
             
     def _update_viewport(self) -> None:
