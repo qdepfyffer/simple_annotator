@@ -58,6 +58,7 @@ from .mask import count_annotated, mask_path
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 ANNOTATED_COLOR = QColor("#0072B2")  # Color of images w/ annotations already (provided they're where they're expected)
+CURRENT_COLOR = QColor("#EB4034")   # Color of image that is in the process of being annotated
 
 
 class MainWindow(QMainWindow):
@@ -180,9 +181,13 @@ class MainWindow(QMainWindow):
 
         self.session = None
         self._pending_path = path
+        self.proxy.current_path = path
+        self.tree.viewport().update()
+
         worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
         worker.signals.finished.connect(self._on_segmented)
         worker.signals.failed.connect(self._on_segment_failed)
+
         self.pool.start(worker)
 
 
@@ -415,26 +420,35 @@ class ImageDirProxy(QSortFilterProxyModel):
     def __init__(self, fs_model: QFileSystemModel) -> None:
         super().__init__()
         self.fs_model = fs_model
+        self.current_path: Path | None = None
         self.setSourceModel(fs_model)
 
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        if index.column() == 0 and self._has_mask(index):
-            if role == Qt.ItemDataRole.ForegroundRole:
+        if index.column() != 0:
+            return super().data(index, role)
+        path = self._image_path(index)
+        if path is None:
+            return super().data(index, role)
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if path == self.current_path:
+                return QBrush(CURRENT_COLOR)
+            if mask_path(path).exists():
                 return QBrush(ANNOTATED_COLOR)
-            if role == Qt.ItemDataRole.FontRole:
-                font = QFont()
-                font.setBold(True)
-                return font
+        if role == Qt.ItemDataRole.FontRole and (path == self.current_path or mask_path(path).exists()):
+            font = QFont()
+            font.setBold(True)
+            return font
+
         return super().data(index, role)
 
 
-    def _has_mask(self, index: QModelIndex) -> bool:
+    def _image_path(self, index: QModelIndex) -> Path | None:
         source_index = self.mapToSource(index)
         if self.fs_model.isDir(source_index):
-            return False
+            return None
         path = Path(self.fs_model.filePath(source_index))
-        return path.suffix.lower() in IMAGE_EXTENSIONS and mask_path(path).exists()
+        return path if path.suffix.lower() in IMAGE_EXTENSIONS else None
 
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
