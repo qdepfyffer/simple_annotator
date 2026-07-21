@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QObject,
     QRunnable,
     QSortFilterProxyModel,
+    Qt,
     QThreadPool,
     Signal,
     Slot,
@@ -26,8 +27,10 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
+    QBrush,
     QCloseEvent,
     QColor,
+    QFont,
     QKeySequence,
     QPalette,
 )
@@ -51,9 +54,10 @@ from PySide6.QtWidgets import (
 
 from . import config, segmentation
 from .annotation import DEFAULT_CLASSES, AnnotationSession
-from .mask import count_annotated
+from .mask import count_annotated, mask_path
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+ANNOTATED_COLOR = QColor("#0072B2")  # Color of images w/ annotations already (provided they're where they're expected)
 
 
 class MainWindow(QMainWindow):
@@ -209,6 +213,7 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
             return False
+        self.tree.viewport().update()
         return True
 
 
@@ -405,12 +410,32 @@ class MainWindow(QMainWindow):
 
 
 class ImageDirProxy(QSortFilterProxyModel):
-    """Hide useless (no imgs or subdirectories) folders"""
+    """Hide useless (no imgs or subdirectories) folders & tint file browser entries w/ annotations"""
 
     def __init__(self, fs_model: QFileSystemModel) -> None:
         super().__init__()
         self.fs_model = fs_model
         self.setSourceModel(fs_model)
+
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if index.column() == 0 and self._has_mask(index):
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QBrush(ANNOTATED_COLOR)
+            if role == Qt.ItemDataRole.FontRole:
+                font = QFont()
+                font.setBold(True)
+                return font
+        return super().data(index, role)
+
+
+    def _has_mask(self, index: QModelIndex) -> bool:
+        source_index = self.mapToSource(index)
+        if self.fs_model.isDir(source_index):
+            return False
+        path = Path(self.fs_model.filePath(source_index))
+        return path.suffix.lower() in IMAGE_EXTENSIONS and mask_path(path).exists()
+
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         index = self.fs_model.index(source_row, 0, source_parent)
