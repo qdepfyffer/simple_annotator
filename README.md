@@ -126,11 +126,11 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 
 *(I'll cross these off as they're added or something)*
 
-* Zooming, if possible, to help with annotations
+* ~~Zooming, if possible, to help with annotations~~
 * Easier between-image navigation to further help speed up annotation
 * A button to reset the mask
 * Caching of the superpixel border overlay
-* Setting for superpixel border overlay color
+* ~~Setting for superpixel border overlay color~~
 * Better scaling of superpixel border overlay on smaller images
 * ~~A button to audit annotation progress (how many labels have been completed)~~
 * Other segmentation algorithms
