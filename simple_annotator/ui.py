@@ -56,151 +56,6 @@ from .mask import count_annotated
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
-class ImageDirProxy(QSortFilterProxyModel):
-    """Hide useless (no imgs or subdirectories) folders"""
-
-    def __init__(self, fs_model: QFileSystemModel) -> None:
-        super().__init__()
-        self.fs_model = fs_model
-        self.setSourceModel(fs_model)
-
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
-        index = self.fs_model.index(source_row, 0, source_parent)
-        if not self.fs_model.isDir(index):
-            # Only show files with valid extensions
-            return Path(self.fs_model.fileName(index)).suffix.lower() in IMAGE_EXTENSIONS
-        try:
-            with os.scandir(self.fs_model.filePath(index)) as entries:
-                # Hide any useless folders
-                return any(e.is_dir() or Path(e.name).suffix.lower() in IMAGE_EXTENSIONS for e in entries)
-        except OSError:
-            return False
-
-
-class SegmentWorker(QRunnable):
-    """Runs a segmenter on a background thread and signals resulting labels"""
-
-
-    class Signals(QObject):
-        finished = Signal(Path, np.ndarray, np.ndarray)  # path, img, lbl
-        failed = Signal(Path, str)
-
-
-    def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: segmentation.ParamValues) -> None:
-        super().__init__()
-        self.path = path
-        self.image = image
-        self.segmenter = segmenter
-        self.params = params
-        self.signals = self.Signals()
-
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            labels = segmentation.run_segmenter(self.segmenter, self.image, self.params)
-        except Exception as e:
-            self.signals.failed.emit(self.path, str(e))
-            return
-        self.signals.finished.emit(self.path, self.image, labels)
-
-
-class SettingsDialog(QDialog):
-    """Edit segmenter choice and its parameters (determined by segmenter parameter metadata)"""
-
-
-    def __init__(self, settings: config.Settings, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Segmentation Settings")
-        self.settings = settings
-        self._values = {key: dict(params) for key, params in settings.params.items()}
-        self._editors: dict[str, QSpinBox | QDoubleSpinBox] = {}
-        self._form_key = settings.segmenter
-        self._boundary_color = QColor(settings.boundary_color)
-        self.color_button = QPushButton()
-        self.color_button.clicked.connect(self._pick_color)
-        self._update_swatch()
-
-        self.combo = QComboBox()
-        for key, seg in segmentation.REGISTRY.items():
-            self.combo.addItem(seg.label, key)
-        self.combo.setCurrentIndex(self.combo.findData(settings.segmenter))
-
-        self.form = QFormLayout()
-
-        options = QFormLayout()
-        options.addRow("Boundary color", self.color_button)
-
-        buttons = QDialogButtonBox()
-        # Below is not strictly ideal Qt API, but it shuts up an incorrect inspector warning
-        buttons.addButton(QDialogButtonBox.StandardButton.Ok)
-        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.combo)
-        layout.addLayout(self.form)
-        layout.addLayout(options)
-        layout.addWidget(buttons)
-
-        self._build_form()
-        self.combo.currentIndexChanged.connect(self._on_segmenter_changed)
-
-
-    def _pick_color(self) -> None:
-        color = QColorDialog.getColor(self._boundary_color, self, "Boundary Color")
-        if color.isValid():
-            self._boundary_color = color
-            self._update_swatch()
-
-
-    def _update_swatch(self) -> None:
-        self.color_button.setStyleSheet(f"background-color: {self._boundary_color.name()};")
-
-
-    def _stash(self) -> None:
-        """Copy current editor values into the working copy"""
-        for param_key, editor in self._editors.items():
-            self._values[self._form_key][param_key] = editor.value()
-
-
-    def _on_segmenter_changed(self) -> None:
-        self._stash()
-        self._form_key = self.combo.currentData()
-        self._build_form()
-
-
-    def _build_form(self) -> None:
-        while self.form.rowCount():
-            self.form.removeRow(0)
-        self._editors.clear()
-        seg = segmentation.REGISTRY[self._form_key]
-        values = self._values[seg.key]
-        for param in seg.params:
-            low = param.minimum if param.minimum is not None else 0
-            high = param.maximum if param.maximum is not None else 1e9
-            editor: QSpinBox | QDoubleSpinBox
-            if param.type is int:
-                editor = QSpinBox()
-                editor.setRange(int(low), int(high))
-                editor.setValue(int(values[param.key]))
-            else:
-                editor = QDoubleSpinBox()
-                editor.setRange(float(low), float(high))
-                editor.setValue(float(values[param.key]))
-            self._editors[param.key] = editor
-            self.form.addRow(param.label, editor)
-
-
-    def apply(self) -> None:
-        """Write edited values back to settings"""
-        self._stash()
-        self.settings.segmenter = self._form_key
-        self.settings.params = self._values
-        self.settings.boundary_color = self._boundary_color.name()
-
-
 class MainWindow(QMainWindow):
     """Main window for the annotator"""
 
@@ -305,9 +160,26 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.borders_action)
 
 
-    def _current_class(self) -> int:
-        action = self.class_group.checkedAction()
-        return action.data() if action else 0
+    def _on_file_activated(self, index: QModelIndex) -> None:
+        path = Path(self.fs_model.filePath(self.proxy.mapToSource(index)))
+        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+            return
+        self.open_image(path)
+
+
+    def open_image(self, path: Path) -> None:
+        self._finish_session()  # Save the previous image before opening the new one
+        image = np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
+        self._image_artist = None  # Reset signal
+        self._show(image)  # Shows raw img while segmentation is running
+        self.statusBar().showMessage(f"Segmenting {path.name}...")
+
+        self.session = None
+        self._pending_path = path
+        worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
+        worker.signals.finished.connect(self._on_segmented)
+        worker.signals.failed.connect(self._on_segment_failed)
+        self.pool.start(worker)
 
 
     def _finish_session(self) -> None:
@@ -330,6 +202,76 @@ class MainWindow(QMainWindow):
                 self._try_save(self.session)
 
 
+    def _try_save(self, session: AnnotationSession) -> bool:
+        """Try to save session mask and push up filesystem errors that otherwise die quietly"""
+        try:
+            session.save()
+        except OSError as e:
+            QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
+            return False
+        return True
+
+
+    def _show(self, image: np.ndarray) -> None:
+        self._display_image = image
+        if self._image_artist is None:
+            self.axes.clear()
+            self.axes.set_axis_off()
+            self._image_artist = self.axes.imshow(image, interpolation="nearest")
+            self.axes.set_aspect("equal", adjustable="datalim")
+        else:
+            self._update_viewport()
+        self.canvas.draw_idle()
+
+
+    def _update_viewport(self) -> None:
+        """Give the artist only the visible region of the image"""
+        if self._display_image is None or self._image_artist is None:
+            return
+        height, width = self._display_image.shape[:2]
+        x0, x1 = self.axes.get_xlim()
+        y1, y0 = self.axes.get_ylim()  # Inverted for images
+        col0, col1 = max(int(x0), 0), min(int(x1) + 2, width)
+        row0, row1 = max(int(y0), 0), min(int(y1) + 2, height)
+        if col1 <= col0 or row1 <= row0:
+            return  # No part of the image is visible
+        step = max(1, round((col1 - col0) / self.axes.bbox.width), round((row1 - row0) / self.axes.bbox.height))
+        view = self._display_image[row0:row1:step, col0:col1:step]
+        self._image_artist.set_data(view)
+        self._image_artist.set_extent((col0 - 0.5, col0 + view.shape[1] * step - 0.5,
+                                      row0 + view.shape[0] * step - 0.5, row0 - 0.5))
+
+
+    def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
+        if path != self._pending_path:
+            return  # Stale result
+        self._pending_path = None
+        session = AnnotationSession(path, image, labels)
+        self.session = session
+        self._show(self._render())
+        if session.load_warning is not None:
+            QMessageBox.warning(self,
+                                "Mask Not Loaded",
+                                session.load_warning + "\nSaving will overwrite the existing mask.")
+        self.statusBar().showMessage(f"{path.name} - {int(labels.max()) + 1} segments")
+
+
+    def _render(self) -> np.ndarray:
+        assert self.session is not None  # Guarded against everywhere I call it, should never be an issue
+        color = self.settings.boundary_color
+        rgb = (int(color[1:3], 16) / 255,
+               int(color[3:5], 16) / 255,
+               int(color[5:7], 16) / 255)
+        return self.session.render_display(boundary_color=rgb, boundaries=self.borders_action.isChecked())
+
+
+    def _on_segment_failed(self, path: Path, error: str) -> None:
+        if path != self._pending_path:
+            return
+        self._pending_path = None
+        self.statusBar().showMessage(f"Segmentation failed - {path.name} - {error}")
+
+
     def _on_canvas_press(self, event: MouseEvent) -> None:
         if event.xdata is None or event.ydata is None:
             return
@@ -340,11 +282,34 @@ class MainWindow(QMainWindow):
             self._paint(event.xdata, event.ydata, class_index)
 
 
-    def _on_file_activated(self, index: QModelIndex) -> None:
-        path = Path(self.fs_model.filePath(self.proxy.mapToSource(index)))
-        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+    def _current_class(self) -> int:
+        action = self.class_group.checkedAction()
+        return action.data() if action else 0
+
+
+    def _paint(self, x: float, y: float, class_index: int) -> None:
+        if self.session is None:
             return
-        self.open_image(path)
+        column, row = int(round(x)), int(round(y))
+        height, width = self.session.labels.shape
+        if not (0 <= column < width and 0 <= row < height):
+            return
+        if self.session.assign(column, row, class_index):
+            self._show(self._render())
+
+
+    def _on_scroll(self, event: MouseEvent) -> None:
+        if event.inaxes is not self.axes or event.xdata is None or event.ydata is None:
+            return
+        factor = 1 / 1.2 if event.step > 0 else 1.2
+        x0, x1 = self.axes.get_xlim()
+        y0, y1 = self.axes.get_ylim()
+        self.axes.set_xlim(event.xdata + (x0 - event.xdata) * factor,
+                           event.xdata + (x1 - event.xdata) * factor)
+        self.axes.set_ylim(event.ydata + (y0 - event.ydata) * factor,
+                           event.ydata + (y1 - event.ydata) * factor)
+        self._update_viewport()
+        self.canvas.draw_idle()
 
 
     def _on_motion(self, event: MouseEvent) -> None:
@@ -369,39 +334,23 @@ class MainWindow(QMainWindow):
             self._pan_anchor = None  # Reset the pan anchor
 
 
-    def _on_scroll(self, event: MouseEvent) -> None:
-        if event.inaxes is not self.axes or event.xdata is None or event.ydata is None:
+    def _undo(self) -> None:
+        if self.session is not None and self.session.undo():
+            self._show(self._render())
+
+
+    def _redo(self) -> None:
+        if self.session is not None and self.session.redo():
+            self._show(self._render())
+
+
+    def _save(self) -> None:
+        if self.session is None:
             return
-        factor = 1 / 1.2 if event.step > 0 else 1.2
-        x0, x1 = self.axes.get_xlim()
-        y0, y1 = self.axes.get_ylim()
-        self.axes.set_xlim(event.xdata + (x0 - event.xdata) * factor,
-                           event.xdata + (x1 - event.xdata) * factor)
-        self.axes.set_ylim(event.ydata + (y0 - event.ydata) * factor,
-                           event.ydata + (y1 - event.ydata) * factor)
-        self._update_viewport()
-        self.canvas.draw_idle()
-
-
-    def _on_segment_failed(self, path: Path, error: str) -> None:
-        if path != self._pending_path:
-            return
-        self._pending_path = None
-        self.statusBar().showMessage(f"Segmentation failed - {path.name} - {error}")
-
-
-    def _on_segmented(self, path: Path, image: np.ndarray, labels: np.ndarray) -> None:
-        if path != self._pending_path:
-            return  # Stale result
-        self._pending_path = None
-        session = AnnotationSession(path, image, labels)
-        self.session = session
-        self._show(self._render())
-        if session.load_warning is not None:
-            QMessageBox.warning(self,
-                                "Mask Not Loaded",
-                                session.load_warning + "\nSaving will overwrite the existing mask.")
-        self.statusBar().showMessage(f"{path.name} - {int(labels.max()) + 1} segments")
+        if self._try_save(self.session):
+            self.statusBar().showMessage(f"Saved {self.session.mask_path}")
+        else:
+            self.statusBar().showMessage(f"Could not save {self.session.mask_path}")
 
 
     def _open_settings(self) -> None:
@@ -419,61 +368,6 @@ class MainWindow(QMainWindow):
             self._show(self._render())  # Don't resegment if we just change the color
 
 
-    def _paint(self, x: float, y: float, class_index: int) -> None:
-        if self.session is None:
-            return
-        column, row = int(round(x)), int(round(y))
-        height, width = self.session.labels.shape
-        if not (0 <= column < width and 0 <= row < height):
-            return
-        if self.session.assign(column, row, class_index):
-            self._show(self._render())
-
-
-    def _redo(self) -> None:
-        if self.session is not None and self.session.redo():
-            self._show(self._render())
-
-
-    def _render(self) -> np.ndarray:
-        assert self.session is not None  # Guarded against everywhere I call it, should never be an issue
-        color = self.settings.boundary_color
-        rgb = (int(color[1:3], 16) / 255,
-               int(color[3:5], 16) / 255,
-               int(color[5:7], 16) / 255)
-        return self.session.render_display(boundary_color=rgb, boundaries=self.borders_action.isChecked())
-
-
-    def _save(self) -> None:
-        if self.session is None:
-            return
-        if self._try_save(self.session):
-            self.statusBar().showMessage(f"Saved {self.session.mask_path}")
-        else:
-            self.statusBar().showMessage(f"Could not save {self.session.mask_path}")
-
-
-    def _reset_view(self) -> None:
-        if self._display_image is None:
-            return
-        height, width = self._display_image.shape[:2]
-        self.axes.set_xlim(-0.5, width - 0.5)
-        self.axes.set_ylim(height - 0.5, -0.5)  # Inverted for images
-        self._update_viewport()
-        self.canvas.draw_idle()
-
-
-    def _show(self, image: np.ndarray) -> None:
-        self._display_image = image
-        if self._image_artist is None:
-            self.axes.clear()
-            self.axes.set_axis_off()
-            self._image_artist = self.axes.imshow(image, interpolation="nearest")
-            self.axes.set_aspect("equal", adjustable="datalim")
-        else:
-            self._update_viewport()
-        self.canvas.draw_idle()
-
     def _show_progress(self) -> None:
         if self.session is not None:
             folder = self.session.image_path.parent
@@ -490,42 +384,19 @@ class MainWindow(QMainWindow):
         )
 
 
+    def _reset_view(self) -> None:
+        if self._display_image is None:
+            return
+        height, width = self._display_image.shape[:2]
+        self.axes.set_xlim(-0.5, width - 0.5)
+        self.axes.set_ylim(height - 0.5, -0.5)  # Inverted for images
+        self._update_viewport()
+        self.canvas.draw_idle()
+
+
     def _toggle_borders(self) -> None:
         if self.session is not None:
             self._show(self._render())
-
-
-    def _try_save(self, session: AnnotationSession) -> bool:
-        """Try to save session mask and push up filesystem errors that otherwise die quietly"""
-        try:
-            session.save()
-        except OSError as e:
-            QMessageBox.critical(self, "Save Failed", f"Could not save session {session.mask_path}:\n{e}")
-            return False
-        return True
-
-
-    def _undo(self) -> None:
-        if self.session is not None and self.session.undo():
-            self._show(self._render())
-            
-            
-    def _update_viewport(self) -> None:
-        """Give the artist only the visible region of the image"""
-        if self._display_image is None or self._image_artist is None:
-            return
-        height, width = self._display_image.shape[:2]
-        x0, x1 = self.axes.get_xlim()
-        y1, y0 = self.axes.get_ylim()  # Inverted for images
-        col0, col1 = max(int(x0), 0), min(int(x1) + 2, width)
-        row0, row1 = max(int(y0), 0), min(int(y1) + 2, height)
-        if col1 <= col0 or row1 <= row0:
-            return  # No part of the image is visible
-        step = max(1, round((col1 - col0) / self.axes.bbox.width), round((row1 - row0) / self.axes.bbox.height))
-        view = self._display_image[row0:row1:step, col0:col1:step]
-        self._image_artist.set_data(view)
-        self._image_artist.set_extent((col0 - 0.5, col0 + view.shape[1] * step - 0.5,
-                                      row0 + view.shape[0] * step - 0.5, row0 - 0.5))
 
 
     def closeEvent(self, event: QCloseEvent):
@@ -533,16 +404,146 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-    def open_image(self, path: Path) -> None:
-        self._finish_session()  # Save the previous image before opening the new one
-        image = np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
-        self._image_artist = None  # Reset signal
-        self._show(image)  # Shows raw img while segmentation is running
-        self.statusBar().showMessage(f"Segmenting {path.name}...")
+class ImageDirProxy(QSortFilterProxyModel):
+    """Hide useless (no imgs or subdirectories) folders"""
 
-        self.session = None
-        self._pending_path = path
-        worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
-        worker.signals.finished.connect(self._on_segmented)
-        worker.signals.failed.connect(self._on_segment_failed)
-        self.pool.start(worker)
+    def __init__(self, fs_model: QFileSystemModel) -> None:
+        super().__init__()
+        self.fs_model = fs_model
+        self.setSourceModel(fs_model)
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        index = self.fs_model.index(source_row, 0, source_parent)
+        if not self.fs_model.isDir(index):
+            # Only show files with valid extensions
+            return Path(self.fs_model.fileName(index)).suffix.lower() in IMAGE_EXTENSIONS
+        try:
+            with os.scandir(self.fs_model.filePath(index)) as entries:
+                # Hide any useless folders
+                return any(e.is_dir() or Path(e.name).suffix.lower() in IMAGE_EXTENSIONS for e in entries)
+        except OSError:
+            return False
+
+
+class SegmentWorker(QRunnable):
+    """Runs a segmenter on a background thread and signals resulting labels"""
+
+
+    class Signals(QObject):
+        finished = Signal(Path, np.ndarray, np.ndarray)  # path, img, lbl
+        failed = Signal(Path, str)
+
+
+    def __init__(self, path: Path, image: np.ndarray, segmenter: str, params: segmentation.ParamValues) -> None:
+        super().__init__()
+        self.path = path
+        self.image = image
+        self.segmenter = segmenter
+        self.params = params
+        self.signals = self.Signals()
+
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            labels = segmentation.run_segmenter(self.segmenter, self.image, self.params)
+        except Exception as e:
+            self.signals.failed.emit(self.path, str(e))
+            return
+        self.signals.finished.emit(self.path, self.image, labels)
+
+
+class SettingsDialog(QDialog):
+    """Edit segmenter choice and its parameters (determined by segmenter parameter metadata)"""
+
+
+    def __init__(self, settings: config.Settings, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Segmentation Settings")
+        self.settings = settings
+        self._values = {key: dict(params) for key, params in settings.params.items()}
+        self._editors: dict[str, QSpinBox | QDoubleSpinBox] = {}
+        self._form_key = settings.segmenter
+        self._boundary_color = QColor(settings.boundary_color)
+        self.color_button = QPushButton()
+        self.color_button.clicked.connect(self._pick_color)
+        self._update_swatch()
+
+        self.combo = QComboBox()
+        for key, seg in segmentation.REGISTRY.items():
+            self.combo.addItem(seg.label, key)
+        self.combo.setCurrentIndex(self.combo.findData(settings.segmenter))
+
+        self.form = QFormLayout()
+
+        options = QFormLayout()
+        options.addRow("Boundary color", self.color_button)
+
+        buttons = QDialogButtonBox()
+        # Below is not strictly ideal Qt API, but it shuts up an incorrect inspector warning
+        buttons.addButton(QDialogButtonBox.StandardButton.Ok)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.combo)
+        layout.addLayout(self.form)
+        layout.addLayout(options)
+        layout.addWidget(buttons)
+
+        self._build_form()
+        self.combo.currentIndexChanged.connect(self._on_segmenter_changed)
+
+
+    def _update_swatch(self) -> None:
+        self.color_button.setStyleSheet(f"background-color: {self._boundary_color.name()};")
+
+
+    def _build_form(self) -> None:
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self._editors.clear()
+        seg = segmentation.REGISTRY[self._form_key]
+        values = self._values[seg.key]
+        for param in seg.params:
+            low = param.minimum if param.minimum is not None else 0
+            high = param.maximum if param.maximum is not None else 1e9
+            editor: QSpinBox | QDoubleSpinBox
+            if param.type is int:
+                editor = QSpinBox()
+                editor.setRange(int(low), int(high))
+                editor.setValue(int(values[param.key]))
+            else:
+                editor = QDoubleSpinBox()
+                editor.setRange(float(low), float(high))
+                editor.setValue(float(values[param.key]))
+            self._editors[param.key] = editor
+            self.form.addRow(param.label, editor)
+
+
+    def _pick_color(self) -> None:
+        color = QColorDialog.getColor(self._boundary_color, self, "Boundary Color")
+        if color.isValid():
+            self._boundary_color = color
+            self._update_swatch()
+
+
+    def _on_segmenter_changed(self) -> None:
+        self._stash()
+        self._form_key = self.combo.currentData()
+        self._build_form()
+
+
+    def _stash(self) -> None:
+        """Copy current editor values into the working copy"""
+        for param_key, editor in self._editors.items():
+            self._values[self._form_key][param_key] = editor.value()
+
+
+    def apply(self) -> None:
+        """Write edited values back to settings"""
+        self._stash()
+        self.settings.segmenter = self._form_key
+        self.settings.params = self._values
+        self.settings.boundary_color = self._boundary_color.name()

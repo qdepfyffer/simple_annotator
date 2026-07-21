@@ -66,6 +66,7 @@ class AnnotationSession:
         self.dirty = True
         return True
 
+
     def undo(self) -> bool:
         if not self._undo:
             return False
@@ -74,6 +75,7 @@ class AnnotationSession:
         self._redo.append((sid, old, new))
         self.dirty = True
         return True
+
 
     def redo(self) -> bool:
         if not self._redo:
@@ -86,13 +88,6 @@ class AnnotationSession:
 
     # === RENDERING ====================================================================================================
 
-    def _colors(self) -> np.ndarray:
-        return np.array([c.color for c in self.classes], dtype=np.uint8)
-
-    def render_mask(self) -> np.ndarray:
-        """Opaque RGB mask that gets saved where pixels are colored by their classes"""
-        return self._colors()[self.segment_class][self.labels]
-
     def render_display(self, boundary_color: tuple[float, float, float] = (1, 1, 0), alpha: float = 0.5,
                        boundaries: bool = True) -> np.ndarray:
         """Image + superpixel borders with non-default segments tinted"""
@@ -104,6 +99,15 @@ class AnnotationSession:
         if not boundaries:
             return display  # For allowing user to hide superpixel border overlay
         return img_as_ubyte(mark_boundaries(img_as_float(display), self.labels, color=boundary_color, mode="inner"))
+
+
+    def render_mask(self) -> np.ndarray:
+        """Opaque RGB mask that gets saved where pixels are colored by their classes"""
+        return self._colors()[self.segment_class][self.labels]
+
+
+    def _colors(self) -> np.ndarray:
+        return np.array([c.color for c in self.classes], dtype=np.uint8)
 
     # === PERSISTENCE ==================================================================================================
 

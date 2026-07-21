@@ -18,6 +18,12 @@ def count_annotated(image_dir: Path | str, extensions: set[str]) -> tuple[int, i
     return done, len(images)
 
 
+def mask_path(image_path: Path) -> Path:
+    """Full path to mask image for a given source image"""
+    image_path = Path(image_path)
+    return labels_dir(image_path) / (image_path.stem + MASK_SUFFIX + ".png")
+
+
 def labels_dir(image_path: Path) -> Path:
     """Sibling folder for image masks: <parent>_labels"""
     parent = image_path.parent
@@ -29,12 +35,6 @@ def load_mask(path: Path) -> np.ndarray | None:
     if not path.exists():
         return None
     return np.asarray(Image.open(path).convert("RGBA").convert("RGB"))
-
-
-def mask_path(image_path: Path) -> Path:
-    """Full path to mask image for a given source image"""
-    image_path = Path(image_path)
-    return labels_dir(image_path) / (image_path.stem + MASK_SUFFIX + ".png")
 
 
 def save_mask(mask: np.ndarray, path: Path) -> None:
