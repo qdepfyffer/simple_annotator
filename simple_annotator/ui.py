@@ -5,29 +5,48 @@ Qt user interface for the annotator
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
+import numpy as np
 from matplotlib.backend_bases import MouseButton, MouseEvent
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-import numpy as np
 from PIL import Image
 from PySide6.QtCore import (
-    QDir, QModelIndex, QObject,
-    QRunnable, QSortFilterProxyModel, QThreadPool,
-    Signal, Slot,
+    QDir,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    QSortFilterProxyModel,
+    QThreadPool,
+    Signal,
+    Slot,
 )
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor,
-    QKeySequence, QPalette, QCloseEvent,
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QColor,
+    QKeySequence,
+    QPalette,
 )
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog,
-    QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-    QFileSystemModel, QMainWindow, QMessageBox,
-    QPushButton, QSpinBox, QSplitter,
-    QTreeView, QVBoxLayout, QWidget,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileSystemModel,
+    QFormLayout,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import config, segmentation

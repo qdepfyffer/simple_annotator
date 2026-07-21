@@ -10,7 +10,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from platformdirs import user_config_dir
+
 from . import segmentation
 
 APP_NAME = "simple_annotator"

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
 import numpy as np
 from skimage.segmentation import mark_boundaries
 from skimage.util import img_as_float, img_as_ubyte
+
 from .mask import load_mask, mask_path, save_mask
 
 
