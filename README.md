@@ -32,7 +32,7 @@ py -m venv .venv
 ```
 
 > If PowerShell refuses to run the activation script, run
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once, then retry. *
+> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once, then retry. *
 > 
 > \* https://stackoverflow.com/a/4038991
 
