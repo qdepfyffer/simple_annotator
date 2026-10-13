@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from skimage.segmentation import mark_boundaries
-from skimage.util import img_as_float, img_as_ubyte
+from skimage.segmentation import find_boundaries
 
 from .mask import load_mask, mask_path, save_mask
 
@@ -34,6 +33,7 @@ class AnnotationSession:
         self.image_path = Path(image_path)
         self.image = image
         self.labels = labels
+        self._boundary_mask = find_boundaries(labels, mode="inner")
         self.classes = classes
         self.mask_path = mask_path(image_path)
         
@@ -88,17 +88,16 @@ class AnnotationSession:
 
     # === RENDERING ====================================================================================================
 
-    def render_display(self, boundary_color: tuple[float, float, float] = (1, 1, 0), alpha: float = 0.5,
+    def render_display(self, boundary_color: tuple[int, int, int] = (255, 255, 0), alpha: float = 0.5,
                        boundaries: bool = True) -> np.ndarray:
         """Image + superpixel borders with non-default segments tinted"""
-        display = self.image.astype(np.float64)
-        painted_px = (self.segment_class !=0)[self.labels]
-        mask_rgb = self.render_mask().astype(np.float64)
-        display[painted_px] = (1 - alpha) * display[painted_px] + alpha * mask_rgb[painted_px]
-        display = display.astype(np.uint8)
-        if not boundaries:
-            return display  # For allowing user to hide superpixel border overlay
-        return img_as_ubyte(mark_boundaries(img_as_float(display), self.labels, color=boundary_color, mode="inner"))
+        display = self.image.copy()
+        painted_px = (self.segment_class != 0)[self.labels]
+        tint = self.render_mask()
+        display[painted_px] = ((1 - alpha) * display[painted_px] + alpha * tint[painted_px]).astype(np.uint8)
+        if boundaries:
+            display[self._boundary_mask] = boundary_color
+        return display
 
 
     def render_mask(self) -> np.ndarray:

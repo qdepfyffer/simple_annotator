@@ -269,9 +269,9 @@ class MainWindow(QMainWindow):
     def _render(self) -> np.ndarray:
         assert self.session is not None  # Guarded against everywhere I call it, should never be an issue
         color = self.settings.boundary_color
-        rgb = (int(color[1:3], 16) / 255,
-               int(color[3:5], 16) / 255,
-               int(color[5:7], 16) / 255)
+        rgb = (int(color[1:3], 16),
+               int(color[3:5], 16),
+               int(color[5:7], 16))
         return self.session.render_display(boundary_color=rgb, boundaries=self.borders_action.isChecked())
 
 
