@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
 from .mask import load_mask, mask_path, save_mask
@@ -34,6 +35,7 @@ class AnnotationSession:
         self.image = image
         self.labels = labels
         self._boundary_mask = find_boundaries(labels, mode="inner")
+        self._slices = {p.label - 1: p.slice for p in regionprops(labels + 1)}
         self.classes = classes
         self.mask_path = mask_path(image_path)
         
@@ -45,6 +47,8 @@ class AnnotationSession:
         self.dirty = False
         self.load_warning: str | None = None  # Error message to show user when a load issue occurs
 
+        self._display: np.ndarray | None = None
+        self._display_key: tuple[tuple[int, int, int], float, bool] = ((255, 255, 0), 0.5, True)
         self._load_existing()
 
     @property
@@ -61,6 +65,7 @@ class AnnotationSession:
         if old == class_index:
             return False
         self.segment_class[sid] = class_index
+        self._patch(sid)
         self._undo.append((sid, old, class_index))
         self._redo.clear()
         self.dirty = True
@@ -72,6 +77,7 @@ class AnnotationSession:
             return False
         sid, old, new = self._undo.pop()
         self.segment_class[sid] = old
+        self._patch(sid)
         self._redo.append((sid, old, new))
         self.dirty = True
         return True
@@ -82,6 +88,7 @@ class AnnotationSession:
             return False
         sid, old, new = self._redo.pop()
         self.segment_class[sid] = new
+        self._patch(sid)
         self._undo.append((sid, old, new))
         self.dirty = True
         return True
@@ -90,6 +97,23 @@ class AnnotationSession:
 
     def render_display(self, boundary_color: tuple[int, int, int] = (255, 255, 0), alpha: float = 0.5,
                        boundaries: bool = True) -> np.ndarray:
+        """Returns the cached picture"""
+        key = (boundary_color, alpha, boundaries)
+        display = self._display
+        if display is None or key != self._display_key:
+            display = self._build_display(boundary_color, alpha, boundaries)
+            self._display = display
+            self._display_key = key
+        return display
+
+
+    def render_mask(self) -> np.ndarray:
+        """Opaque RGB mask that gets saved where pixels are colored by their classes"""
+        return self._colors()[self.segment_class][self.labels]
+
+
+    def _build_display(self, boundary_color: tuple[int, int, int], alpha: float,
+                       boundaries: bool) -> np.ndarray:
         """Image + superpixel borders with non-default segments tinted"""
         display = self.image.copy()
         painted_px = (self.segment_class != 0)[self.labels]
@@ -100,13 +124,26 @@ class AnnotationSession:
         return display
 
 
-    def render_mask(self) -> np.ndarray:
-        """Opaque RGB mask that gets saved where pixels are colored by their classes"""
-        return self._colors()[self.segment_class][self.labels]
-
-
     def _colors(self) -> np.ndarray:
         return np.array([c.color for c in self.classes], dtype=np.uint8)
+
+
+    def _patch(self, sid: int) -> None:
+        """Redraw one superpixel within the cached display"""
+        display = self._display
+        if display is None:
+            return
+        boundary_color, alpha, boundaries = self._display_key
+        box = self._slices[sid]
+        inside = self.labels[box] == sid
+        region = display[box]
+        pixels = self.image[box][inside]
+        class_index = self.segment_class[sid]
+        if class_index != 0:
+            pixels = ((1 - alpha) * pixels + alpha * self._colors()[class_index]).astype(np.uint8)
+        region[inside] = pixels
+        if boundaries:
+            region[inside & self._boundary_mask[box]] = boundary_color
 
     # === PERSISTENCE ==================================================================================================
 

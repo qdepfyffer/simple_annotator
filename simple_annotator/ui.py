@@ -58,7 +58,7 @@ from .mask import count_annotated, mask_path
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 ANNOTATED_COLOR = QColor("#0072B2")  # Color of images w/ annotations already (provided they're where they're expected)
-CURRENT_COLOR = QColor("#EB4034")   # Color of image that is in the process of being annotated
+CURRENT_COLOR = QColor("#EB4034")   # Color of image that is in the process of being annotated, unused for now, ugly
 
 
 class MainWindow(QMainWindow):
@@ -431,11 +431,9 @@ class ImageDirProxy(QSortFilterProxyModel):
         if path is None:
             return super().data(index, role)
         if role == Qt.ItemDataRole.ForegroundRole:
-            if path == self.current_path:
-                return QBrush(CURRENT_COLOR)
             if mask_path(path).exists():
                 return QBrush(ANNOTATED_COLOR)
-        if role == Qt.ItemDataRole.FontRole and (path == self.current_path or mask_path(path).exists()):
+        if role == Qt.ItemDataRole.FontRole and (path == self.current_path):
             font = QFont()
             font.setBold(True)
             return font
