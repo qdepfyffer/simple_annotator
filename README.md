@@ -4,6 +4,8 @@ This repository contains a tool I created to solve a couple of headaches with th
 
 Basically, this was built from the ground up, using more modern options where available, for one specific purpose. It's not a tool to do a ton of different things; it is a tool for annotating. As such, the entire experience has been streamlined in order to make that specific task as simple as possible.
 
+2026-10-15: I'll be trying to go back and document this program better as I update things in case something like the old bugs we faced ever show up again. I forgot to update the README before I started this process.
+
 ## Getting Started
 
 **Requires Python 3.12+**
