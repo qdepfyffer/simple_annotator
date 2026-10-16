@@ -127,6 +127,29 @@ class AnnotationSession:
         self.dirty = True
         return True
 
+    def reset(self) -> bool:
+        """
+        Assign the default class back to every superpixel
+        Return true if something changes
+        """
+        if not self.annotated:
+            return False
+
+        # Reset every segment's class to 0 (0 is treated as the default class)
+        self.segment_class[:] = 0
+
+        # Clear undo and redo caches since the states they existed for no longer exist
+        # We could (probably) make the reset undo-able but for now that's out of scope (I don't want to right now)
+        self._undo.clear()
+        self._redo.clear()
+
+        # Clear display so it gets fully refreshed next time it's drawn
+        self._display = None
+
+        # Mask has changed = dirty
+        self.dirty = True
+        return True
+
     # === RENDERING ====================================================================================================
 
     def render_display(self, boundary_color: tuple[int, int, int] = (255, 255, 0), alpha: float = 0.5,
@@ -134,7 +157,7 @@ class AnnotationSession:
         """
         Returns the cached picture to be displayed on-screen
         Full rebuild of the image only happens the very first time or when the display key is changed
-        Edits are incrementally applied so a full rebuild isn't necessary with every annoation
+        Edits are incrementally applied so a full rebuild isn't necessary with every annotation
         """
         key = (boundary_color, alpha, boundaries)  # Cache key so we can determine when we need to fully rebuild the display
         display = self._display

@@ -134,6 +134,10 @@ class MainWindow(QMainWindow):
         redo_action.triggered.connect(self._redo)
         toolbar.addAction(redo_action)
 
+        clear_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditClear), "Clear Mask", self)
+        clear_action.triggered.connect(self._clear_mask)
+        toolbar.addAction(clear_action)
+
         toolbar.addSeparator()
         self.borders_action = QAction("Borders", self)
         self.borders_action.setCheckable(True)
@@ -212,11 +216,15 @@ class MainWindow(QMainWindow):
             if self.session.dirty:
                 self._try_save(self.session)
         elif self.session.dirty or not self.session.mask_path.exists():
+            message = (f"{self.session.image_path.name} has no annotations.\n"
+                       f"Save an all-{self.session.classes[0].name} mask?")
+            # This is in case the user resets an existing mask and then exits, so technically you can restart the app to undo a mask clear
+            if self.session.mask_path.exists():
+                message += "\nChoosing No keeps the existing mask on disk."
             answer = QMessageBox.question(
                 self,
                 "Unannotated Image",
-                f"{self.session.image_path.name} has no annotations.\n"
-                f"Save an all-{self.session.classes[0].name} mask?",
+                message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -356,6 +364,28 @@ class MainWindow(QMainWindow):
         if event.button == MouseButton.MIDDLE:
             self._pan_anchor = None  # Reset the pan anchor
 
+    def _clear_mask(self) -> None:
+        """
+        Clears the mask of any annotations by resetting the class id of every superpixel to 0
+        """
+
+        # No reason to reset a nonexistent session or a mask that doesn't have any annotations yet 
+        if self.session is None or not self.session.annotated:
+            self.statusBar().showMessage("Nothing to clear")
+            return
+
+        # Make the user confirm whether they really want to clear all the annotations, since undoing a mask clear is not currently undo-able
+        answer = QMessageBox.question(
+            self,
+            "Clear Mask",
+            f"Clear all annotations for {self.session.image_path.name}?\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        # if session.reset() only gets invoked if the answer is yes
+        if answer == QMessageBox.StandardButton.Yes and self.session.reset():
+            self._show(self._render())
 
     def _undo(self) -> None:
         if self.session is not None and self.session.undo():
@@ -386,9 +416,9 @@ class MainWindow(QMainWindow):
         if self.session is None:
             return
         if (self.settings.segmenter, self.settings.params) != before:
-            self.open_image(self.session.image_path)  # For resegmenting on changed settings
+            self.open_image(self.session.image_path)  # For re-segmenting on changed settings
         else:
-            self._show(self._render())  # Don't resegment if we just change the color
+            self._show(self._render())  # Don't re-segment if we just change the color
 
 
     def _show_progress(self) -> None:

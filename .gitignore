@@ -6,8 +6,9 @@ __pycache__/
 # Virtual Environment
 .venv/
 
-# JetBrains IDEs
+# IDEs
 .idea/
+.vscode/
 
 # OS files
 .DS_Store
