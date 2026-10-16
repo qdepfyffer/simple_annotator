@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
+    QIcon,
     QKeySequence,
     QPalette,
 )
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTreeView,
@@ -62,7 +64,9 @@ CURRENT_COLOR = QColor("#EB4034")   # Color of image that is in the process of b
 
 
 class MainWindow(QMainWindow):
-    """Main window for the annotator"""
+    """
+    Main window for the annotator
+    """
 
 
     def __init__(self) -> None:
@@ -114,6 +118,30 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar("Annotate")
         toolbar.setMovable(False)
 
+        save_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), "Save", self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.triggered.connect(self._save)
+        toolbar.addAction(save_action)
+
+        toolbar.addSeparator()
+        undo_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditUndo), "Undo", self)
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_action.triggered.connect(self._undo)
+        toolbar.addAction(undo_action)
+
+        redo_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditRedo), "Redo", self)
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_action.triggered.connect(self._redo)
+        toolbar.addAction(redo_action)
+
+        toolbar.addSeparator()
+        self.borders_action = QAction("Borders", self)
+        self.borders_action.setCheckable(True)
+        self.borders_action.setChecked(True)
+        self.borders_action.setShortcut("B")
+        self.borders_action.toggled.connect(self._toggle_borders)
+        toolbar.addAction(self.borders_action)
+
         self.class_group = QActionGroup(self)
         for index, cls in enumerate(DEFAULT_CLASSES):
             action = QAction(cls.name, self)
@@ -125,28 +153,6 @@ class MainWindow(QMainWindow):
         self.class_group.actions()[1].setChecked(True)  # Sets the first non-default class as the class to paint
 
         toolbar.addSeparator()
-        undo_action = QAction("Undo", self)
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        undo_action.triggered.connect(self._undo)
-        toolbar.addAction(undo_action)
-
-        redo_action = QAction("Redo", self)
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        redo_action.triggered.connect(self._redo)
-        toolbar.addAction(redo_action)
-
-        toolbar.addSeparator()
-        save_action = QAction("Save", self)
-        save_action.setShortcut(QKeySequence.StandardKey.Save)
-        save_action.triggered.connect(self._save)
-        toolbar.addAction(save_action)
-
-        toolbar.addSeparator()
-        settings_action = QAction("Settings", self)
-        settings_action.triggered.connect(self._open_settings)
-        toolbar.addAction(settings_action)
-
-        toolbar.addSeparator()
         progress_action = QAction("Progress", self)
         progress_action.triggered.connect(self._show_progress)
         toolbar.addAction(progress_action)
@@ -156,13 +162,17 @@ class MainWindow(QMainWindow):
         reset_action.triggered.connect(self._reset_view)
         toolbar.addAction(reset_action)
 
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+
         toolbar.addSeparator()
-        self.borders_action = QAction("Borders", self)
-        self.borders_action.setCheckable(True)
-        self.borders_action.setChecked(True)
-        self.borders_action.setShortcut("B")
-        self.borders_action.toggled.connect(self._toggle_borders)
-        toolbar.addAction(self.borders_action)
+        settings_icon = QIcon.fromTheme("preferences-system", QIcon.fromTheme(QIcon.ThemeIcon.DocumentProperties))
+        settings_action = QAction(settings_icon, "Settings", self)
+        settings_action.triggered.connect(self._open_settings)
+        toolbar.addAction(settings_action)
+
+
 
 
     def _on_file_activated(self, index: QModelIndex) -> None:
@@ -180,6 +190,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Segmenting {path.name}...")
 
         self.session = None
+        self.borders_action.setChecked(True)  # Reset border display option on image change so every segmentation immediately shows borders
         self._pending_path = path
         self.proxy.current_path = path
         self.tree.viewport().update()
@@ -192,7 +203,9 @@ class MainWindow(QMainWindow):
 
 
     def _finish_session(self) -> None:
-        """Save work before leaving current image w/ a confirmation dialog for saving unannotated images"""
+        """
+        Save work before leaving current image w/ a confirmation dialog for saving unannotated images
+        """
         if self.session is None:
             return
         if self.session.annotated:
