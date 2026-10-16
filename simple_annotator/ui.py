@@ -374,7 +374,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Nothing to clear")
             return
 
-        # Make the user confirm whether they really want to clear all the annotations, since undoing a mask clear is not currently undo-able
+        # Make the user confirm whether they really want to clear all the annotations, since a clear can't currently be undone
         answer = QMessageBox.question(
             self,
             "Clear Mask",
@@ -383,7 +383,7 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
 
-        # if session.reset() only gets invoked if the answer is yes
+        # `and` short circuits so session.reset() only gets invoked if the answer is yes
         if answer == QMessageBox.StandardButton.Yes and self.session.reset():
             self._show(self._render())
 
