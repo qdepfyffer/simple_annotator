@@ -1,4 +1,6 @@
-"""Mask file locations and handling"""
+"""
+Mask file locations and handling
+"""
 
 from __future__ import annotations
 

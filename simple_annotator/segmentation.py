@@ -29,7 +29,7 @@ class Param:
 
 @dataclass(frozen=True)
 class Segmenter:
-    """A named segmentation algoritm and schema for parameters"""
+    """A named segmentation algorithm and schema for parameters"""
     key: str
     label: str
     params: tuple[Param, ...]
