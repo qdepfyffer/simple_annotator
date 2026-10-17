@@ -72,7 +72,8 @@ Once Simple Annotator opens, you'll see a file browser on the left and a blank c
    1. `Ctrl + S` / `Cmd + S`, or the button on the toolbar
    2. Navigating away from the current image to a new image
    3. Closing Simple Annotator
-5. To check your progress, click the 'Progress' button on the toolbar. This will open a dialog showing the progress for the current folder.
+5. Annotate the next image! You can move between images by either selecting the next image you want to annotate in the file tree or by using the "Previous Image" and "Next Image" buttons, or via the hotkeys "A" and "D" by default.
+6. To check your progress, click the "Progress" button on the toolbar. This will open a dialog showing the progress for the current folder.
 
 ## Guidelines for proper annotation *
 
@@ -129,7 +130,7 @@ Presumably, those two bugs were responsible for other broken behavior as well. T
 *(I'll cross these off as they're added or something)*
 
 * ~~Zooming, if possible, to help with annotations~~
-* Easier between-image navigation to further help speed up annotation
+* ~~Easier between-image navigation to further help speed up annotation~~
 * ~~A button to reset the mask~~
 * ~~Caching of the superpixel border overlay~~
 * ~~Setting for superpixel border overlay color~~
