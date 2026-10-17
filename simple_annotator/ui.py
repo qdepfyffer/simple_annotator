@@ -1,10 +1,26 @@
 """
 Qt user interface for the annotator
+
+MainWindow: Application window - File browser on the left, image canvas to the right, toolbar up top
+            Has ownership over the AnnotationSession and user settings
+
+ImageDirProxy:  Allows for filtering of the Qt filesystem model so we can hide directories that don't contain images
+                and recolor entries in the file browser based on their status (active, annotated)
+
+SegmentWorker:  What actually runs the slow segmentation - happens on a background thread so the window remains responsive
+                and reports back via Qt signals
+
+SettingsDialog: Allows for the user to choose a segmenter and edit its parameters + border color
+
+The canvas is just a matplotlib figure. We let matplotlib handle pretty much everything to do with the display of the image.
+It's really slow but since this was based on the previous tool it was a natural place to start. Future work could potentially
+find another way to handle image display that isn't so horribly slow.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -12,6 +28,7 @@ import numpy as np
 from matplotlib.backend_bases import MouseButton, MouseEvent
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from matplotlib.image import AxesImage
 from PIL import Image
 from PySide6.QtCore import (
     QDir,
@@ -58,53 +75,76 @@ from . import config, segmentation
 from .annotation import DEFAULT_CLASSES, AnnotationSession
 from .mask import count_annotated, mask_path
 
+# What file extensions will be treated as valid images by our annotator?
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 ANNOTATED_COLOR = QColor("#0072B2")  # Color of images w/ annotations already (provided they're where they're expected)
 CURRENT_COLOR = QColor("#EB4034")   # Color of image that is in the process of being annotated, unused for now, ugly
 
+# Define a sorting key so next/prev navigation follows the layout the user would expect based on the file tree
+def _natural_key(path: Path) -> list[int | str]:
+    """
+    Sort key that matches the file tree - case insensitive & strings of digits compared as numbers
+    """
+
+    # Ex. img10.png becomes ["img", 10, ".png"]
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
+
 
 class MainWindow(QMainWindow):
     """
-    Main window for the annotator
+    Main window for the annotator.
     """
 
-
     def __init__(self) -> None:
+        """
+        Build the whole window. 
+        """
+
+        # Basic window initialization, set the title & starting resolution, load settings
         super().__init__()
         self.setWindowTitle("Simple Annotator")
         self.resize(1280, 720)
-
         self.settings = config.load()
-        self.pool = QThreadPool().globalInstance()
-        self.session: AnnotationSession | None = None
-        self._pending_path: Path | None = None
-        self._image_artist = None
-        self._display_image: np.ndarray | None = None
-        self._pan_anchor: tuple[float, float] | None = None
-        self._last_pan_draw = 0.0
+
+        self.pool = QThreadPool.globalInstance()            # Qt global thread pool
+        self.session: AnnotationSession | None = None       # Image currently being annotated
+        self._pending_path: Path | None = None              # Path to the image currently being segmented (so we can throw away results from prev images if we open a new image before it finishes)
+        self._image_artist: AxesImage | None = None                           
+        self._display_image: np.ndarray | None = None       # Full-res image currently on screen
+        self._pan_anchor: tuple[float, float] | None = None # Image coordinate which pan movements are anchored to
+        self._last_pan_draw = 0.0                           # For throttling redraws
         
         # === FILE BROWSER =============================================================================================
-        self.fs_model = QFileSystemModel()
-        self.fs_model.setRootPath(QDir.homePath())
-        self.tree = QTreeView()
-        self.proxy = ImageDirProxy(self.fs_model)
+        self.fs_model = QFileSystemModel()                      # Directories lazily read and exposed as a tree model
+        self.fs_model.setRootPath(QDir.homePath())              # Start from the user's home folder
+        self.tree = QTreeView()                                 # Visible file tree widget
+        self.proxy = ImageDirProxy(self.fs_model)               # Proxy for the filesystem that lets us hide irrelevant files / folders and lets us recolor entries
         self.tree.setModel(self.proxy)
-        self.tree.setRootIndex(self.proxy.mapFromSource(self.fs_model.index(QDir.homePath())))
+        self.tree.setRootIndex(
+            self.proxy.mapFromSource(self.fs_model.index(
+                QDir.homePath())                                # Set the home folder as the top of the tree (we have to map it to the proxy for the view)
+                )
+            )
         for column in range(1, self.fs_model.columnCount()):
-            self.tree.hideColumn(column)
-        self.tree.activated.connect(self._on_file_activated)
+            self.tree.hideColumn(column)                        # Hide columns [1..] of the QFileSystemModel, this leaves only the name (column 0)
+        self.tree.activated.connect(self._on_file_activated)    # "activated" fires on double-click (or enter) on most platforms 
 
         # === IMAGE CANVAS =============================================================================================
-        background = self.palette().color(QPalette.ColorRole.Window).name()
-        self.figure = Figure(facecolor=background)
-        self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.mpl_connect("button_press_event", self._on_canvas_press)
+        background = self.palette().color(QPalette.ColorRole.Window).name()     # Make the figure background the same color as the Qt window
+        self.figure = Figure(facecolor=background)                              # Actual drawing surface for matplotlib
+        self.canvas = FigureCanvasQTAgg(self.figure)                            # Qt widget that displays said drawing surface
+
+        # Connect the matplotlib mouse events to our handlers
+        self.canvas.mpl_connect("button_press_event", self._on_canvas_press)    
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_release_event", self._on_release)
+
+        # Set the axes for our figure and turn their visuals off so they don't show on the canvas
         self.axes = self.figure.add_axes((0, 0, 1, 1))
         self.axes.set_axis_off()
 
+        # Set up the layout - side by side file browser and canvas w/ a draggable divider
         splitter = QSplitter()
         splitter.addWidget(self.tree)
         splitter.addWidget(self.canvas)
@@ -112,16 +152,28 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
         splitter.setSizes([300, 900])
         self.setCentralWidget(splitter)
+
+        # First call of statusBar(), creates the bar and sets the initial message
         self.statusBar().showMessage("Open an image to begin")
 
         # === TOOLBAR ==================================================================================================
         toolbar = self.addToolBar("Annotate")
-        toolbar.setMovable(False)
+        toolbar.setMovable(False)  # User shouldn't be able to move the toolbar
 
         save_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), "Save", self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(self._save)
         toolbar.addAction(save_action)
+
+        prev_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.GoPrevious), "Previous Image", self)
+        prev_action.triggered.connect(lambda: self._step_image(-1))
+        prev_action.setShortcut("A")
+        toolbar.addAction(prev_action)
+
+        next_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.GoNext), "Next Image", self)
+        next_action.triggered.connect(lambda: self._step_image(1))
+        next_action.setShortcut("D")
+        toolbar.addAction(next_action)
 
         toolbar.addSeparator()
         undo_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditUndo), "Undo", self)
@@ -146,6 +198,8 @@ class MainWindow(QMainWindow):
         self.borders_action.toggled.connect(self._toggle_borders)
         toolbar.addAction(self.borders_action)
 
+        # One checkable option per class - mutually exclusive
+        # Doing it like this makes it more extensible should we ever need more than 2 classes
         self.class_group = QActionGroup(self)
         for index, cls in enumerate(DEFAULT_CLASSES):
             action = QAction(cls.name, self)
@@ -197,6 +251,11 @@ class MainWindow(QMainWindow):
         self.borders_action.setChecked(True)  # Reset border display option on image change so every segmentation immediately shows borders
         self._pending_path = path
         self.proxy.current_path = path
+
+        index = self.proxy.mapFromSource(self.fs_model.index(str(path)))
+        self.tree.setCurrentIndex(index)
+        self.tree.scrollTo(index)
+
         self.tree.viewport().update()
 
         worker = SegmentWorker(path, image, self.settings.segmenter, self.settings.segmenter_params())
@@ -387,6 +446,16 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes and self.session.reset():
             self._show(self._render())
 
+
+    def _current_path(self) -> Path | None:
+        """
+        Returns either the session's path or _pending_path while segmentation is running - Gets the path to the "current" image
+        """
+        if self.session is not None:
+            return self.session.image_path
+        return self._pending_path
+
+
     def _undo(self) -> None:
         if self.session is not None and self.session.undo():
             self._show(self._render())
@@ -421,22 +490,6 @@ class MainWindow(QMainWindow):
             self._show(self._render())  # Don't re-segment if we just change the color
 
 
-    def _show_progress(self) -> None:
-        if self.session is not None:
-            folder = self.session.image_path.parent
-        elif self._pending_path is not None:
-            folder = self._pending_path.parent
-        else:
-            self.statusBar().showMessage("No image selected")
-            return
-        done, total = count_annotated(folder, IMAGE_EXTENSIONS)
-        QMessageBox.information(
-            self,
-            "Annotation Progress",
-            f"{folder.name}: {done} of {total} images annotated ({done / total:.0%})",
-        )
-
-
     def _reset_view(self) -> None:
         if self._display_image is None:
             return
@@ -446,6 +499,48 @@ class MainWindow(QMainWindow):
         self._update_viewport()
         self.canvas.draw_idle()
 
+
+    def _show_progress(self) -> None:
+        current = self._current_path()
+        if current is None:
+            self.statusBar().showMessage("No image open")
+            return
+        folder = current.parent
+        done, total = count_annotated(folder, IMAGE_EXTENSIONS)
+        QMessageBox.information(
+            self,
+            "Annotation Progress",
+            f"{folder.name}: {done} of {total} images annotated ({done / total:.0%})",
+        )
+
+
+    def _step_image(self, offset: int) -> None:
+        """
+        Steps through the current image list based on the passed offset
+        Stops at either end of the folder instead of wrapping
+        """
+
+        # Get the current path (either the open image or pending image)
+        current = self._current_path()
+        if current is None:
+            self.statusBar().showMessage("No image open")
+            return
+
+        # Get the list of images sorted in the same order they should appear in the file tree
+        images = sorted((p for p in current.parent.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS), key=_natural_key)
+        try:
+            index = images.index(current)
+        except ValueError:
+            return  # Open image doesn't exist as expected (renamed, moved, deleted, etc.)
+        target = index + offset
+
+        # Stop at either end of the folder instead of wrapping
+        # This is an opinionated decision, if you want to change it that is your prerogative 
+        if not 0 <= target < len(images):
+            self.statusBar().showMessage("Already at the " + ("last" if offset > 0 else "first") + " image")
+            return
+        self.open_image(images[target])
+        
 
     def _toggle_borders(self) -> None:
         if self.session is not None:

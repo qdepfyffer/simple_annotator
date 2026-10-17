@@ -37,8 +37,8 @@ class Segmenter:
     """
     A named segmentation algorithm and schema for parameters
     """
-    key: str
-    label: str
+    key: str  # The actual key used to refer to the segmenter
+    label: str  # The human-readable name for the segmenter
     params: tuple[Param, ...]
     func: Callable[..., np.ndarray]
 

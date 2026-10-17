@@ -38,7 +38,7 @@ def count_annotated(image_dir: Path | str, extensions: set[str]) -> tuple[int, i
 def mask_path(image_path: Path) -> Path:
     """
     Determines the full path to the mask image for a given source image
-    photos/img1.jpg -> photos_labels/img1.png
+    photos/img1.jpg -> photos_labels/img1_l.png
     Masks are ALWAYS saved as a .png (throwback to when our masks were being saved as .jpeg) because png is lossless
     """
     image_path = Path(image_path)
