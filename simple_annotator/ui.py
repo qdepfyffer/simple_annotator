@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         progress_action = QAction("Progress", self)
         progress_action.triggered.connect(self._show_progress)
-        proress_action.setShortcut("P")
+        progress_action.setShortcut("P")
         toolbar.addAction(progress_action)
 
         toolbar.addSeparator()
